@@ -104,8 +104,15 @@ function createDatabase(dbPath) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   }
   const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
+
+  // Performance optimizations
+  db.pragma('journal_mode = WAL'); // Write-Ahead Logging for better concurrency
   db.pragma('foreign_keys = ON');
+  db.pragma('synchronous = NORMAL'); // Faster writes, still safe
+  db.pragma('cache_size = -64000'); // 64MB cache (negative = kibibytes)
+  db.pragma('temp_store = MEMORY'); // Store temp tables in memory
+  db.pragma('mmap_size = 30000000000'); // Memory-mapped I/O
+
   initializeSchema(db);
 
   // Migration: add buffer_time_minutes to existing databases that predate this column

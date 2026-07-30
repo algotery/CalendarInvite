@@ -217,13 +217,6 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
   const overrideSection = overridesHtml(overrides || []);
 
   return `
-            <nav>
-          <a href="/admin/dashboard"><i class="ph-duotone ph-squares-four"></i> Dashboard</a>
-          <a href="/admin/bookings"><i class="ph-duotone ph-calendar-check"></i> Bookings</a>
-          <a href="/admin/profiles" class="nav-active"><i class="ph-duotone ph-users"></i> Profiles</a>
-          <a href="/admin/calendars"><i class="ph-duotone ph-calendar-plus"></i> Calendars</a>
-          <a href="/admin/settings"><i class="ph-duotone ph-gear"></i> Settings</a>
-        </nav>
     <h1>${title}</h1>
     ${error ? `<div role="alert" class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">
@@ -489,68 +482,111 @@ function registerProfileRoutes(app) {
 
     const rows = profiles.map(p => {
       const bookingUrl = `${baseUrl}/book/${escapeHtml(p.slug)}`;
+
+      // Get schedule summary for display
+      const schedules = app.db.prepare(
+        "SELECT day_of_week, start_time, end_time FROM schedule_templates WHERE profile_id = ? ORDER BY day_of_week, start_time"
+      ).all(p.id);
+
+      const schedulesByDay = {};
+      schedules.forEach(s => {
+        if (!schedulesByDay[s.day_of_week]) {
+          schedulesByDay[s.day_of_week] = [];
+        }
+        schedulesByDay[s.day_of_week].push({ start: s.start_time, end: s.end_time });
+      });
+
+      const activeDays = Object.keys(schedulesByDay).map(d => DAYS[d].substring(0, 3)).join(', ');
+      const firstDaySchedule = schedulesByDay[Object.keys(schedulesByDay)[0]];
+      const timeRange = firstDaySchedule ? `${firstDaySchedule[0].start} - ${firstDaySchedule[0].end}` : '';
+
       return `
-      <tr>
-        <td><code>${escapeHtml(p.slug)}</code></td>
-        <td>${escapeHtml(p.name)}</td>
-        <td><span class="badge ${p.is_active ? 'success' : 'error'}">${p.is_active ? 'Active' : 'Inactive'}</span></td>
-        <td class="booking-link-cell">
-          <div class="booking-link-container">
-            <a href="${bookingUrl}" target="_blank" class="booking-link" title="Open booking page in new tab">${bookingUrl}</a>
-            <button class="copy-link-btn outline" data-url="${bookingUrl}">Copy</button>
+      <div class="profile-card">
+        <div class="profile-card-left">
+          <div class="profile-card-indicator"></div>
+          <div class="profile-card-content">
+            <h3 class="profile-card-title">${escapeHtml(p.name)}</h3>
+            <div class="profile-card-meta">
+              30 min • ${p.meeting_tool === 'meet' ? 'Google Meet' : p.meeting_tool === 'teams' ? 'Microsoft Teams' : 'Phone call'} • One-on-One<br>
+              <span style="color: var(--text-secondary);">${activeDays ? activeDays + ', ' + timeRange : 'No schedule set'}</span>
+            </div>
           </div>
-        </td>
-        <td>
-          <a href="/admin/profiles/${p.id}/edit" role="button" class="outline" style="padding: 4px 12px; margin: 0;">Edit</a>
-        </td>
-      </tr>
+        </div>
+        <div class="profile-card-actions">
+          <button class="copy-link-btn outline" data-url="${bookingUrl}"><i class="ph ph-link"></i> Copy link</button>
+          <div class="profile-card-menu">
+            <button class="icon-btn dropdown-toggle" data-profile-id="${p.id}">
+              <i class="ph-bold ph-dots-three"></i>
+            </button>
+            <div class="dropdown-menu" id="menu-${p.id}" style="display:none;">
+              <a href="${bookingUrl}" target="_blank" class="dropdown-item"><i class="ph ph-eye"></i> View booking page</a>
+              <a href="/admin/profiles/${p.id}/edit" class="dropdown-item"><i class="ph ph-pencil-simple"></i> Edit</a>
+              <hr style="margin: 4px 0; border: none; border-top: 1px solid #e8e8e8;">
+              <button class="dropdown-item danger" onclick="if(confirm('Delete this profile?')) window.location.href='/admin/profiles/${p.id}/delete'"><i class="ph ph-trash"></i> Delete</button>
+            </div>
+          </div>
+        </div>
+      </div>
     `}).join('');
 
     const html = `
-              <nav>
-          <a href="/admin/dashboard"><i class="ph-duotone ph-squares-four"></i> Dashboard</a>
-          <a href="/admin/bookings"><i class="ph-duotone ph-calendar-check"></i> Bookings</a>
-          <a href="/admin/profiles" class="nav-active"><i class="ph-duotone ph-users"></i> Profiles</a>
-          <a href="/admin/calendars"><i class="ph-duotone ph-calendar-plus"></i> Calendars</a>
-          <a href="/admin/settings"><i class="ph-duotone ph-gear"></i> Settings</a>
-        </nav>
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
-        <h1 style="margin-bottom: 0;">Booking Profiles</h1>
-        <a href="/admin/profiles/new" role="button">+ New Profile</a>
+      <div class="profiles-container">
+        <div class="profiles-header">
+          <h1>Profiles</h1>
+          <div class="profiles-header-actions">
+            <button type="button" class="outline" onclick="alert('Manage availability feature coming soon!')">
+              <i class="ph ph-calendar"></i> Manage availability
+            </button>
+            <a href="/admin/profiles/new" role="button" class="contrast">
+              <i class="ph ph-plus"></i> Create
+            </a>
+          </div>
+        </div>
+
+        <div class="profiles-list">
+          ${rows || '<div class="empty-state"><p>No profiles yet. Create your first one!</p><a href="/admin/profiles/new" role="button" class="contrast">+ Create Profile</a></div>'}
+        </div>
       </div>
-      ${profiles.length ? `
-        <table>
-          <thead><tr><th>Slug</th><th>Name</th><th>Status</th><th>Booking Link</th><th>Actions</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-        <script>
-          document.querySelectorAll('.copy-link-btn').forEach(function(btn) {
-            btn.addEventListener('click', function() {
-              var url = btn.dataset.url;
-              navigator.clipboard.writeText(url).then(function() {
-                var originalText = btn.textContent;
-                btn.textContent = 'Copied!';
-                btn.style.background = 'var(--success)';
-                btn.style.color = 'var(--neutral-0)';
-                btn.style.borderColor = 'var(--success)';
-                setTimeout(function() {
-                  btn.textContent = originalText;
-                  btn.style.background = '';
-                  btn.style.color = '';
-                  btn.style.borderColor = '';
-                }, 2000);
-              }).catch(function() {
-                btn.textContent = 'Failed';
-                setTimeout(function() {
-                  btn.textContent = 'Copy';
-                }, 2000);
-              });
+
+      <script>
+        // Copy link functionality
+        document.querySelectorAll('.copy-link-btn').forEach(btn => {
+          btn.addEventListener('click', function() {
+            const url = this.dataset.url;
+            navigator.clipboard.writeText(url).then(() => {
+              const originalText = this.innerHTML;
+              this.innerHTML = '<i class="ph ph-check"></i> Copied!';
+              setTimeout(() => {
+                this.innerHTML = originalText;
+              }, 2000);
             });
           });
-        </script>
-      ` : '<article><p>No profiles yet. Create your first booking profile to get started.</p><a href="/admin/profiles/new" role="button">Create Profile</a></article>'}
+        });
+
+        // Dropdown menu functionality
+        document.querySelectorAll('.dropdown-toggle').forEach(toggle => {
+          toggle.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const profileId = this.dataset.profileId;
+            const menu = document.getElementById('menu-' + profileId);
+            const isVisible = menu.style.display === 'block';
+
+            // Close all menus
+            document.querySelectorAll('.dropdown-menu').forEach(m => m.style.display = 'none');
+
+            // Toggle current menu
+            menu.style.display = isVisible ? 'none' : 'block';
+          });
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', () => {
+          document.querySelectorAll('.dropdown-menu').forEach(m => m.style.display = 'none');
+        });
+      </script>
     `;
-    reply.type('text/html').send(require('./app').BASE_LAYOUT('Profiles', html));
+
+    reply.type('text/html').send(require('./app').BASE_LAYOUT('Profiles', html, true, 'profiles'));
   });
 
   app.get('/profiles/new', async (request, reply) => {
@@ -558,7 +594,7 @@ function registerProfileRoutes(app) {
     const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE status = 'connected'").all();
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
     const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, null, [], adminTimezone);
-    reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html));
+    reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
   });
 
   app.post('/profiles', { preHandler: app.csrfProtection }, async (request, reply) => {
@@ -568,7 +604,7 @@ function registerProfileRoutes(app) {
       const token = reply.generateCsrf();
       const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE status = 'connected'").all();
       const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.');
-      return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html));
+      return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
     }
 
     const existing = app.db.prepare("SELECT id FROM booking_profiles WHERE slug = ?").get(slug);
@@ -576,7 +612,7 @@ function registerProfileRoutes(app) {
       const token = reply.generateCsrf();
       const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE status = 'connected'").all();
       const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'That slug already exists. Please choose a different one.');
-      return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html));
+      return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
     }
 
     const buffer_time_minutes = parseInt(request.body.buffer_time_minutes, 10) || 0;
@@ -644,7 +680,7 @@ function registerProfileRoutes(app) {
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
 
     const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds, writeCalendarIds }, null, overrides, adminTimezone);
-    reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html));
+    reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
   });
 
   app.post('/profiles/:id', { preHandler: app.csrfProtection }, async (request, reply) => {
@@ -663,7 +699,7 @@ function registerProfileRoutes(app) {
       const attendees = app.db.prepare("SELECT email FROM default_attendees WHERE profile_id = ?").all(profile.id).map(a => a.email);
       const templates = app.db.prepare("SELECT * FROM schedule_templates WHERE profile_id = ?").all(profile.id);
       const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.');
-      return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html));
+      return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
 
     const existing = app.db.prepare("SELECT id FROM booking_profiles WHERE slug = ? AND id != ?").get(slug, id);
@@ -673,7 +709,7 @@ function registerProfileRoutes(app) {
       const attendees = app.db.prepare("SELECT email FROM default_attendees WHERE profile_id = ?").all(profile.id).map(a => a.email);
       const templates = app.db.prepare("SELECT * FROM schedule_templates WHERE profile_id = ?").all(profile.id);
       const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'That slug already exists.');
-      return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html));
+      return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
 
     app.db.prepare(

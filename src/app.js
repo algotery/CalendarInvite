@@ -12,6 +12,7 @@ const { buildGoogleAuthUrl, exchangeCodeForTokens, getGoogleUserEmail } = requir
 const { encrypt, decrypt } = require('./encryption');
 const { registerProfileRoutes } = require('./profiles');
 const { registerBookingRoutes, registerSlotsApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook } = require('./booking');
+const { addPerformanceIndexes, getBatchedBookings } = require('./performance-fixes');
 
 
 const TIMEZONES = [
@@ -32,7 +33,41 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-const BASE_LAYOUT = (title, body) => `<!DOCTYPE html>
+const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '') => {
+  const content = isAdmin ? `
+<div class="app-layout">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <i class="ph-fill ph-calendar-blank"></i>
+      CalendarInvite
+    </div>
+    <div class="sidebar-create">
+      <a href="/admin/profiles/new"><i class="ph ph-plus"></i> Create</a>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="/admin/dashboard" class="${activeNav === 'dashboard' ? 'nav-active' : ''}"><i class="ph-fill ph-squares-four"></i> Dashboard</a>
+      <a href="/admin/bookings" class="${activeNav === 'bookings' ? 'nav-active' : ''}"><i class="ph-fill ph-calendar-check"></i> Meetings</a>
+      <a href="/admin/profiles" class="${activeNav === 'profiles' ? 'nav-active' : ''}"><i class="ph-fill ph-user"></i> Profiles</a>
+      <a href="/admin/calendars" class="${activeNav === 'calendars' ? 'nav-active' : ''}"><i class="ph-fill ph-calendar-plus"></i> Calendars</a>
+      <a href="/admin/settings" class="${activeNav === 'settings' ? 'nav-active' : ''}"><i class="ph-fill ph-gear"></i> Settings</a>
+    </nav>
+    <div class="sidebar-footer">
+      <a href="/admin/logout"><i class="ph-fill ph-sign-out"></i> Logout</a>
+    </div>
+  </aside>
+  <main class="main-content">
+    <div class="content-wrapper">
+      ${body}
+    </div>
+  </main>
+</div>
+` : `
+  <main class="container">
+    ${body}
+  </main>
+`;
+
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -47,12 +82,9 @@ const BASE_LAYOUT = (title, body) => `<!DOCTYPE html>
   <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
-  <main class="container">
-    ${body}
-  </main>
+  ${content}
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
   <script>
-    // Initialize flatpickr on any element with .time-picker class globally
     document.addEventListener('DOMContentLoaded', () => {
       if (typeof flatpickr !== 'undefined') {
         window.initTimePickers = function() {
@@ -71,6 +103,7 @@ const BASE_LAYOUT = (title, body) => `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+};
 
 function buildApp(opts = {}) {
   const app = fastify({ logger: opts.logger || false });
@@ -87,6 +120,9 @@ function buildApp(opts = {}) {
   app.decorate('db', db);
   app.decorate('fetchFn', opts.fetchFn || globalThis.fetch);
   app.decorate('zohoFetch', null);
+
+  // Add performance indexes
+  addPerformanceIndexes(db);
 
   app.register(fastifyStatic, {
     root: path.join(__dirname, '..', 'public'),
@@ -222,15 +258,7 @@ function buildApp(opts = {}) {
         return `<tr><td>${escapeHtml(dateStr)}</td><td>${escapeHtml(b.title)}</td><td>${escapeHtml(b.booker_name)}</td><td>${escapeHtml(b.profile_name)}</td></tr>`;
       }).join('');
 
-      reply.type('text/html').send(BASE_LAYOUT('Dashboard', `
-                <nav>
-          <a href="/admin/dashboard" class="nav-active"><i class="ph-duotone ph-squares-four"></i> Dashboard</a>
-          <a href="/admin/bookings"><i class="ph-duotone ph-calendar-check"></i> Bookings</a>
-          <a href="/admin/profiles"><i class="ph-duotone ph-users"></i> Profiles</a>
-          <a href="/admin/calendars"><i class="ph-duotone ph-calendar-plus"></i> Calendars</a>
-          <a href="/admin/settings"><i class="ph-duotone ph-gear"></i> Settings</a>
-        </nav>
-        <h1>Dashboard</h1>
+      reply.type('text/html').send(BASE_LAYOUT('Dashboard', `\n        <h1>Dashboard</h1>
         <div class="grid">
           <article>
             <span class="stat-icon"><i class="ph-duotone ph-users" style="font-size: 1.5rem;"></i></span>
@@ -260,7 +288,7 @@ function buildApp(opts = {}) {
             <button type="submit" class="secondary" style="font-size:0.875rem;"><i class="ph-duotone ph-sign-out" style="margin-right:4px;"></i> Logout</button>
           </form>
         </div>
-      `));
+      `, true, 'dashboard'));
     });
 
     app.get('/bookings', async (request, reply) => {
@@ -269,88 +297,134 @@ function buildApp(opts = {}) {
       const admin = app.db.prepare('SELECT timezone FROM admin WHERE id = ?').get(adminId);
       const adminTz = admin ? admin.timezone : 'UTC';
 
-      const { status, profile_id, page } = request.query;
-      const currentPage = parseInt(page, 10) || 1;
-      const perPage = 20;
-      const offset = (currentPage - 1) * perPage;
+      const { status, profile_id } = request.query;
 
-      let where = [];
-      let params = [];
-      if (status && (status === 'confirmed' || status === 'cancelled')) {
-        where.push('b.status = ?');
-        params.push(status);
-      }
-      if (profile_id) {
-        where.push('b.profile_id = ?');
-        params.push(parseInt(profile_id, 10));
-      }
+      // Use optimized batch query
+      const bookings = getBatchedBookings(app.db, adminTz, {
+        status,
+        profile_id,
+        limit: 100, // Show all bookings without pagination for better UX
+        offset: 0
+      });
 
-      const whereClause = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
-      const now = new Date().toISOString();
+      const formatterDate = new Intl.DateTimeFormat('en-GB', { timeZone: adminTz, weekday: 'short', day: 'numeric', month: 'short' });
+      const formatterTime = new Intl.DateTimeFormat('en-GB', { timeZone: adminTz, hour: '2-digit', minute: '2-digit', hour12: false });
 
-      const countResult = app.db.prepare(`SELECT COUNT(*) as count FROM bookings b ${whereClause}`).get(...params);
-      const totalPages = Math.ceil(countResult.count / perPage);
+      const grouped = {};
+      const today = new Date();
+      const todayStr = formatterDate.format(today).replace(',', '');
 
-      const bookings = app.db.prepare(
-        `SELECT b.*, bp.name as profile_name FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id ${whereClause} ORDER BY CASE WHEN b.start_time > ? THEN 0 ELSE 1 END, b.start_time ASC LIMIT ? OFFSET ?`
-      ).all(...params, now, perPage, offset);
-
-      const profiles = app.db.prepare("SELECT id, name FROM booking_profiles ORDER BY name").all();
-      const profileOptions = profiles.map(p =>
-        `<option value="${p.id}"${profile_id && parseInt(profile_id) === p.id ? ' selected' : ''}>${escapeHtml(p.name)}</option>`
-      ).join('');
-
-      const rows = bookings.map(b => {
+      bookings.forEach(b => {
         const start = new Date(b.start_time);
-        const dateStr = start.toLocaleString('en-US', { timeZone: adminTz, dateStyle: 'medium', timeStyle: 'short' });
-        const statusBadge = b.status === 'cancelled'
-          ? '<span class="badge error">Cancelled</span>'
-          : '<span class="badge success">Confirmed</span>';
-        const cancelBtn = b.status === 'confirmed'
-          ? `<form method="POST" action="/admin/bookings/${b.id}/cancel" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><button type="submit" class="warning outline" style="padding: 4px 8px; font-size: 12px; margin-right: 4px;">Cancel</button></form>`
-          : '';
-        const deleteBtn = `<form method="POST" action="/admin/bookings/${b.id}/delete" style="display:inline" onsubmit="return confirm('Are you sure you want to permanently delete this booking?');"><input type="hidden" name="_csrf" value="${token}"><button type="submit" class="danger outline" style="padding: 4px 8px; font-size: 12px;">Delete</button></form>`;
-        return `<tr><td>${escapeHtml(dateStr)}</td><td>${b.duration_minutes} min</td><td>${escapeHtml(b.profile_name)}</td><td>${escapeHtml(b.booker_name)}</td><td>${escapeHtml(b.booker_email)}</td><td>${escapeHtml(b.title)}</td><td>${statusBadge}</td><td class="actions-cell" style="white-space: nowrap;">${cancelBtn}${deleteBtn}</td></tr>`;
+        const dateKey = formatterDate.format(start).replace(',', '');
+        if (!grouped[dateKey]) {
+           grouped[dateKey] = { meetings: [], date: start };
+        }
+        grouped[dateKey].meetings.push(b);
+      });
 
-      }).join('');
+      // Check if we need to show today section even if no meetings
+      let hasTodayMeetings = grouped[todayStr] !== undefined;
 
-      const pagination = totalPages > 1 ? `        <nav>
-          <a href="/admin/dashboard"><i class="ph-duotone ph-squares-four"></i> Dashboard</a>
-          <a href="/admin/bookings"><i class="ph-duotone ph-calendar-check"></i> Bookings</a>
-          <a href="/admin/profiles"><i class="ph-duotone ph-users"></i> Profiles</a>
-          <a href="/admin/calendars"><i class="ph-duotone ph-calendar-plus"></i> Calendars</a>
-          <a href="/admin/settings"><i class="ph-duotone ph-gear"></i> Settings</a>
-        </nav>` : '';
+      let rowsHtml = '';
+
+      // Show past/upcoming meetings first
+      const sortedDates = Object.entries(grouped).sort((a, b) => a[1].date - b[1].date);
+
+      for (const [dateStr, group] of sortedDates) {
+         const isToday = dateStr === todayStr;
+         rowsHtml += `
+           <div class="meeting-day-group">
+             <div class="meeting-day-header">
+               ${escapeHtml(dateStr)}${isToday ? ' <span class="today-badge">Today</span>' : ''}
+             </div>
+             ${isToday ? '<div class="current-time-line"></div>' : ''}
+             <div class="meeting-list">
+         `;
+         group.meetings.forEach(b => {
+            const start = new Date(b.start_time);
+            const end = new Date(start.getTime() + b.duration_minutes * 60000);
+
+            const startTimeStr = formatterTime.format(start);
+            const endTimeStr = formatterTime.format(end);
+
+            const cancelBtn = b.status === 'confirmed'
+              ? `<form method="POST" action="/admin/bookings/${b.id}/cancel" style="display:inline; margin:0;" onsubmit="return confirm('Are you sure you want to cancel this meeting?');"><input type="hidden" name="_csrf" value="${token}"><button type="submit" class="icon-btn" title="Cancel Meeting"><i class="ph-bold ph-x"></i></button></form>`
+              : `<span class="badge error">Cancelled</span>`;
+
+            rowsHtml += `
+              <div class="meeting-row">
+                <div class="meeting-time">
+                  ${startTimeStr} - ${endTimeStr}
+                </div>
+                <div class="meeting-details">
+                  <div class="meeting-dot"></div>
+                  <span class="meeting-title">${escapeHtml(b.title || b.profile_name)}</span>
+                  <span class="meeting-booker">with ${escapeHtml(b.booker_name)}</span>
+                </div>
+                <div class="meeting-actions">
+                  <a href="mailto:${escapeHtml(b.booker_email)}" class="icon-btn" title="Email Booker"><i class="ph-bold ph-envelope-simple"></i></a>
+                  ${b.status === 'confirmed' ? cancelBtn : cancelBtn}
+                </div>
+              </div>
+            `;
+         });
+         rowsHtml += `
+             </div>
+           </div>
+         `;
+      }
+
+      // If no meetings today and we have other meetings, show today section with empty state
+      if (!hasTodayMeetings && sortedDates.length > 0) {
+        rowsHtml += `
+          <div class="meeting-day-group">
+            <div class="meeting-day-header">
+              ${escapeHtml(todayStr)} <span class="today-badge">Today</span>
+            </div>
+            <div class="current-time-line"></div>
+            <div class="meetings-empty">
+              <div class="meetings-empty-icon"><i class="ph-duotone ph-calendar-blank"></i></div>
+              <h3>You're all caught up!</h3>
+              <p>No upcoming meetings. Enjoy the open time, or schedule new meetings.</p>
+              <a href="/" target="_blank" role="button" class="contrast outline">Schedule a meeting</a>
+            </div>
+          </div>
+        `;
+      }
+
+      // If no meetings at all, show empty state
+      if (sortedDates.length === 0) {
+        rowsHtml = `
+          <div class="meetings-empty">
+            <div class="meetings-empty-icon"><i class="ph-duotone ph-calendar-blank"></i></div>
+            <h3>You're all caught up!</h3>
+            <p>No upcoming meetings. Enjoy the open time, or schedule new meetings.</p>
+            <a href="/" target="_blank" role="button" class="contrast outline">Schedule a meeting</a>
+          </div>
+        `;
+      }
 
       reply.type('text/html').send(BASE_LAYOUT('Bookings', `
-                <nav>
-          <a href="/admin/dashboard"><i class="ph-duotone ph-squares-four"></i> Dashboard</a>
-          <a href="/admin/bookings" class="nav-active"><i class="ph-duotone ph-calendar-check"></i> Bookings</a>
-          <a href="/admin/profiles"><i class="ph-duotone ph-users"></i> Profiles</a>
-          <a href="/admin/calendars"><i class="ph-duotone ph-calendar-plus"></i> Calendars</a>
-          <a href="/admin/settings"><i class="ph-duotone ph-gear"></i> Settings</a>
-        </nav>
-        <h1>Bookings</h1>
-        <div class="card">
-          <form method="GET" action="/admin/bookings" role="group">
-            <select name="status">
-              <option value="">All Statuses</option>
-              <option value="confirmed"${status === 'confirmed' ? ' selected' : ''}>Confirmed</option>
-              <option value="cancelled"${status === 'cancelled' ? ' selected' : ''}>Cancelled</option>
-            </select>
-            <select name="profile_id">
-              <option value="">All Profiles</option>
-              ${profileOptions}
-            </select>
-            <button type="submit">Filter</button>
-          </form>
+        <div class="page-header-top">
+          <h1>Meetings</h1>
         </div>
-        <table>
-          <thead><tr><th>Date/Time</th><th>Duration</th><th>Profile</th><th>Booker</th><th>Email</th><th>Title</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);">No bookings found</td></tr>'}</tbody>
-        </table>
-        ${pagination}
-      `));
+
+        <div class="meetings-filter-bar">
+          <div class="meetings-filter-left">
+            <button class="ui-dropdown-select" disabled>My CalendarInvite <i class="ph-bold ph-caret-down"></i></button>
+            <div class="ui-filter-search">
+              <i class="ph-bold ph-magnifying-glass"></i>
+              <input type="text" placeholder="Search meetings" disabled>
+            </div>
+          </div>
+          <div class="meetings-filter-right">
+            <button class="ui-filter-btn" disabled><i class="ph-bold ph-faders"></i> Filter <i class="ph-bold ph-caret-down"></i></button>
+          </div>
+        </div>
+
+        ${rowsHtml}
+      `, true, 'bookings'));
     });
 
     app.post('/bookings/:id/cancel', { preHandler: app.csrfProtection }, async (request, reply) => {
@@ -491,15 +565,7 @@ function buildApp(opts = {}) {
         ? `<details><summary>Some providers are not configured</summary><p>Add the following to your <code>.env</code> file:</p><ul>${missingVars.map(v => `<li>${v}</li>`).join('')}</ul></details>`
         : '';
 
-      reply.type('text/html').send(BASE_LAYOUT('Calendar Connections', `
-                <nav>
-          <a href="/admin/dashboard"><i class="ph-duotone ph-squares-four"></i> Dashboard</a>
-          <a href="/admin/bookings"><i class="ph-duotone ph-calendar-check"></i> Bookings</a>
-          <a href="/admin/profiles"><i class="ph-duotone ph-users"></i> Profiles</a>
-          <a href="/admin/calendars" class="nav-active"><i class="ph-duotone ph-calendar-plus"></i> Calendars</a>
-          <a href="/admin/settings"><i class="ph-duotone ph-gear"></i> Settings</a>
-        </nav>
-        <h1>Calendar Connections</h1>
+      reply.type('text/html').send(BASE_LAYOUT('Calendar Connections', `\n        <h1>Calendar Connections</h1>
         ${configNotice}
         <div class="card" style="display: flex; gap: 1rem; flex-wrap: wrap;">
           ${connectBtn('/admin/calendars/connect/google', 'Connect Google Calendar', icons.google, googleConfigured)}
@@ -512,7 +578,7 @@ function buildApp(opts = {}) {
             <tbody>${connectionRows}</tbody>
           </table>
         ` : '<article><p>No calendar connections yet. Connect your calendar to get started.</p></article>'}
-      `));
+      `, true, 'calendars'));
     });
 
     app.get('/calendars/connect/google', async (request, reply) => {
@@ -715,15 +781,7 @@ function buildApp(opts = {}) {
         `<option value="${tz}"${tz === admin.timezone ? ' selected' : ''}>${tz}</option>`
       ).join('');
 
-      reply.type('text/html').send(BASE_LAYOUT('Settings', `
-                <nav>
-          <a href="/admin/dashboard"><i class="ph-duotone ph-squares-four"></i> Dashboard</a>
-          <a href="/admin/bookings"><i class="ph-duotone ph-calendar-check"></i> Bookings</a>
-          <a href="/admin/profiles"><i class="ph-duotone ph-users"></i> Profiles</a>
-          <a href="/admin/calendars"><i class="ph-duotone ph-calendar-plus"></i> Calendars</a>
-          <a href="/admin/settings" class="nav-active"><i class="ph-duotone ph-gear"></i> Settings</a>
-        </nav>
-        <h1>Settings</h1>
+      reply.type('text/html').send(BASE_LAYOUT('Settings', `\n        <h1>Settings</h1>
         ${flash ? `<div role="alert" class="success">${escapeHtml(flash)}</div>` : ''}
         <div class="card">
           <h2 style="display: flex; align-items: center; gap: 8px;"><i class="ph-duotone ph-globe-hemisphere-west"></i> Timezone</h2>
@@ -757,7 +815,7 @@ function buildApp(opts = {}) {
             <button type="submit">Change Password</button>
           </form>
         </div>
-      `));
+      `, true, 'settings'));
     });
 
     app.post('/settings/timezone', { preHandler: app.csrfProtection }, async (request, reply) => {

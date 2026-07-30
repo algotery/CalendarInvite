@@ -3,6 +3,7 @@ const { decrypt } = require('./encryption');
 const { refreshAccessToken: refreshGoogleToken } = require('./google');
 const { createMicrosoftClient } = require('./microsoft');
 const { getZohoClient } = require('./zoho');
+const { optimizedCleanupOldRateLimits } = require('./performance-fixes');
 
 async function getValidTokenForConnection(db, encryptionKey, connection) {
   const expiry = new Date(connection.token_expiry || 0);
@@ -590,7 +591,8 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
 
 function registerRateLimitHook(app) {
   app.addHook('onRequest', async (request, reply) => {
-    cleanupOldRateLimits(app.db);
+    // Optimized cleanup - only runs every 5 minutes instead of every request
+    optimizedCleanupOldRateLimits(app.db);
     const ip = getClientIp(request);
     if (checkIpRateLimit(app.db, ip)) {
       return reply.code(429).send({ error: 'Too many requests, please try again later' });
