@@ -253,41 +253,67 @@ function buildApp(opts = {}) {
         "SELECT b.*, bp.name as profile_name FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > ? ORDER BY b.start_time ASC LIMIT 5"
       ).all(now);
 
-      const next5Rows = next5.map(b => {
+      const next5Cards = next5.map(b => {
         const start = new Date(b.start_time);
-        const dateStr = start.toLocaleString('en-US', { timeZone: adminTz, dateStyle: 'medium', timeStyle: 'short' });
-        return `<tr><td>${escapeHtml(dateStr)}</td><td>${escapeHtml(b.title)}</td><td>${escapeHtml(b.booker_name)}</td><td>${escapeHtml(b.profile_name)}</td></tr>`;
+        const dateStr = start.toLocaleString('en-US', { timeZone: adminTz, dateStyle: 'medium' });
+        const timeStr = start.toLocaleString('en-US', { timeZone: adminTz, timeStyle: 'short' });
+        return `
+          <div class="dashboard-booking-card">
+            <div class="dashboard-booking-time">
+              <span class="dashboard-booking-date">${escapeHtml(dateStr)}</span>
+              <span class="dashboard-booking-hour">${escapeHtml(timeStr)}</span>
+            </div>
+            <div class="dashboard-booking-details">
+              <span class="dashboard-booking-title">${escapeHtml(b.title)}</span>
+              <span class="dashboard-booking-meta">${escapeHtml(b.booker_name)} &middot; ${escapeHtml(b.profile_name)}</span>
+            </div>
+          </div>`;
       }).join('');
 
-      reply.type('text/html').send(BASE_LAYOUT('Dashboard', `\n        <h1>Dashboard</h1>
-        <div class="grid">
-          <article>
-            <span class="stat-icon"><i class="ph-duotone ph-users" style="font-size: 1.5rem;"></i></span>
-            <h3>Active Profiles</h3>
-            <p><strong>${activeProfiles}</strong></p>
-          </article>
-          <article>
-            <span class="stat-icon"><i class="ph-duotone ph-calendar-check" style="font-size: 1.5rem;"></i></span>
-            <h3>Upcoming Bookings</h3>
-            <p><strong>${upcomingCount}</strong></p>
-          </article>
-        </div>
-        ${next5.length ? `
-          <div class="card">
-            <h2>Next Upcoming Bookings</h2>
-            <table>
-              <thead><tr><th>Date/Time</th><th>Title</th><th>Booker</th><th>Profile</th></tr></thead>
-              <tbody>${next5Rows}</tbody>
-            </table>
+      reply.type('text/html').send(BASE_LAYOUT('Dashboard', `
+        <div class="dashboard-page">
+          <div class="dashboard-header">
+            <h1>Dashboard</h1>
           </div>
-        ` : '<article><p>No upcoming bookings.</p></article>'}
-        <div style="display:flex; gap:1rem; margin-top:1.5rem; flex-wrap:wrap; align-items:center;">
-          <a href="/admin/profiles/new" role="button" style="font-size:0.875rem;">+ New Profile</a>
-          <a href="/admin/bookings" role="button" class="outline" style="font-size:0.875rem;">View All Bookings</a>
-          <form method="POST" action="/admin/logout" style="margin: 0; padding: 0; border: none; background: none; margin-left: auto;">
-            <input type="hidden" name="_csrf" value="${token}">
-            <button type="submit" class="secondary" style="font-size:0.875rem;"><i class="ph-duotone ph-sign-out" style="margin-right:4px;"></i> Logout</button>
-          </form>
+          <div class="dashboard-stats">
+            <div class="dashboard-stat-card">
+              <div class="dashboard-stat-icon"><i class="ph-duotone ph-users"></i></div>
+              <div class="dashboard-stat-content">
+                <span class="dashboard-stat-value">${activeProfiles}</span>
+                <span class="dashboard-stat-label">Active Profiles</span>
+              </div>
+            </div>
+            <div class="dashboard-stat-card">
+              <div class="dashboard-stat-icon"><i class="ph-duotone ph-calendar-check"></i></div>
+              <div class="dashboard-stat-content">
+                <span class="dashboard-stat-value">${upcomingCount}</span>
+                <span class="dashboard-stat-label">Upcoming Bookings</span>
+              </div>
+            </div>
+          </div>
+          ${next5.length ? `
+            <div class="dashboard-upcoming-section">
+              <span class="field-label" style="margin-bottom: 12px; display: block;">Upcoming</span>
+              <div class="dashboard-bookings-list">
+                ${next5Cards}
+              </div>
+            </div>
+          ` : `
+            <div class="calendars-empty">
+              <div class="calendars-empty-icon">
+                <i class="ph-duotone ph-calendar-check"></i>
+              </div>
+              <h3>No upcoming bookings</h3>
+            </div>
+          `}
+          <div class="dashboard-actions">
+            <a href="/admin/profiles/new" class="btn-primary"><i class="ph-bold ph-plus"></i> New Profile</a>
+            <a href="/admin/bookings" class="btn-secondary">View All Bookings</a>
+            <form method="POST" action="/admin/logout" style="margin: 0; padding: 0; border: none; background: none; margin-left: auto;">
+              <input type="hidden" name="_csrf" value="${token}">
+              <button type="submit" class="btn-disconnect"><i class="ph-bold ph-sign-out"></i> Logout</button>
+            </form>
+          </div>
         </div>
       `, true, 'dashboard'));
     });
@@ -298,7 +324,8 @@ function buildApp(opts = {}) {
       const admin = app.db.prepare('SELECT timezone FROM admin WHERE id = ?').get(adminId);
       const adminTz = admin ? admin.timezone : 'UTC';
 
-      const { status, profile_id, filter } = request.query;
+      const { status, profile_id, filter, view } = request.query;
+      const activeView = view || 'list';
       const activeFilter = filter || 'today';
       const hasExplicitFilter = !!filter;
 
@@ -434,11 +461,90 @@ function buildApp(opts = {}) {
       const dateDisplay = now.toLocaleDateString('en-US', { timeZone: adminTz, weekday: 'short', month: 'short', day: '2-digit', year: 'numeric' });
       const meetingCount = bookings.length;
 
+      // Calendar view: build monthly grid
+      let calendarHtml = '';
+      if (activeView === 'calendar') {
+        const calMonth = parseInt(request.query.month) || (now.getMonth() + 1);
+        const calYear = parseInt(request.query.year) || now.getFullYear();
+        const prevMonth = calMonth === 1 ? 12 : calMonth - 1;
+        const prevYear = calMonth === 1 ? calYear - 1 : calYear;
+        const nextMonth = calMonth === 12 ? 1 : calMonth + 1;
+        const nextYear = calMonth === 12 ? calYear + 1 : calYear;
+
+        const monthStart = new Date(calYear, calMonth - 1, 1);
+        const monthEnd = new Date(calYear, calMonth, 0);
+        const monthName = monthStart.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+        const allBookings = getBatchedBookings(app.db, adminTz, {
+          status: 'confirmed',
+          timeMin: new Date(calYear, calMonth - 1, 1).toISOString(),
+          timeMax: new Date(calYear, calMonth, 1).toISOString(),
+          limit: 500,
+          offset: 0
+        });
+
+        const bookingsByDay = {};
+        allBookings.forEach(b => {
+          const d = new Date(b.start_time);
+          const localDate = new Date(d.toLocaleString('en-US', { timeZone: adminTz }));
+          const day = localDate.getDate();
+          if (!bookingsByDay[day]) bookingsByDay[day] = [];
+          bookingsByDay[day].push(b);
+        });
+
+        const startDow = monthStart.getDay();
+        const daysInMonth = monthEnd.getDate();
+        const todayDate = new Date(now.toLocaleString('en-US', { timeZone: adminTz })).getDate();
+        const todayMonth = new Date(now.toLocaleString('en-US', { timeZone: adminTz })).getMonth() + 1;
+        const todayYear = new Date(now.toLocaleString('en-US', { timeZone: adminTz })).getFullYear();
+
+        let cells = '';
+        const totalCells = Math.ceil((startDow + daysInMonth) / 7) * 7;
+        for (let i = 0; i < totalCells; i++) {
+          const dayNum = i - startDow + 1;
+          const isCurrentMonth = dayNum >= 1 && dayNum <= daysInMonth;
+          const isToday = isCurrentMonth && dayNum === todayDate && calMonth === todayMonth && calYear === todayYear;
+          const dayBookings = isCurrentMonth ? (bookingsByDay[dayNum] || []) : [];
+
+          let eventsHtml = '';
+          dayBookings.slice(0, 3).forEach(b => {
+            const bStart = new Date(b.start_time);
+            const timeStr = formatterTime.format(bStart);
+            eventsHtml += `<div class="cal-event"><span class="cal-event-time">${timeStr}</span> <span class="cal-event-title">${escapeHtml(b.title || b.profile_name)}</span></div>`;
+          });
+          if (dayBookings.length > 3) {
+            eventsHtml += `<div class="cal-event cal-event-more">+${dayBookings.length - 3} more</div>`;
+          }
+
+          cells += `<div class="cal-cell${isCurrentMonth ? '' : ' cal-cell-outside'}${isToday ? ' cal-cell-today' : ''}">
+            <span class="cal-day-num${isToday ? ' cal-today-num' : ''}">${isCurrentMonth ? dayNum : ''}</span>
+            <div class="cal-events">${eventsHtml}</div>
+          </div>`;
+        }
+
+        calendarHtml = `
+          <div class="cal-header">
+            <a href="/admin/bookings?view=calendar&month=${prevMonth}&year=${prevYear}" class="cal-nav-btn"><i class="ph-bold ph-caret-left"></i></a>
+            <span class="cal-month-title">${escapeHtml(monthName)}</span>
+            <a href="/admin/bookings?view=calendar&month=${nextMonth}&year=${nextYear}" class="cal-nav-btn"><i class="ph-bold ph-caret-right"></i></a>
+          </div>
+          <div class="cal-grid">
+            <div class="cal-weekday">Sun</div><div class="cal-weekday">Mon</div><div class="cal-weekday">Tue</div><div class="cal-weekday">Wed</div><div class="cal-weekday">Thu</div><div class="cal-weekday">Fri</div><div class="cal-weekday">Sat</div>
+            ${cells}
+          </div>
+        `;
+      }
+
       reply.type('text/html').send(BASE_LAYOUT('Bookings', `
         <div class="page-header-top">
           <h1>Meetings</h1>
+          <div class="view-toggle">
+            <a href="/admin/bookings?filter=${activeFilter}&view=list" class="view-toggle-btn${activeView === 'list' ? ' active' : ''}" title="List view"><i class="ph-bold ph-list"></i></a>
+            <a href="/admin/bookings?view=calendar" class="view-toggle-btn${activeView === 'calendar' ? ' active' : ''}" title="Calendar view"><i class="ph-bold ph-calendar-blank"></i></a>
+          </div>
         </div>
 
+        ${activeView === 'list' ? `
         <div class="meetings-filter-bar">
           <div class="meetings-filter-left">
             <span class="filter-date-label">${escapeHtml(dateDisplay)}</span>
@@ -455,8 +561,8 @@ function buildApp(opts = {}) {
             <span class="filter-count">Displaying ${meetingCount} meeting${meetingCount !== 1 ? 's' : ''}</span>
           </div>
         </div>
-
         ${rowsHtml}
+        ` : calendarHtml}
       `, true, 'bookings'));
     });
 
@@ -567,18 +673,23 @@ function buildApp(opts = {}) {
         zoho: `<svg width="18" height="18" viewBox="0 0 24 24" fill="#E31A2D" xmlns="http://www.w3.org/2000/svg"><path d="M23.111 21.054a1.862 1.862 0 1 1 0 3.725 1.862 1.862 0 0 1 0-3.725ZM7.587 3.551a3.551 3.551 0 1 1 0 7.102 3.551 3.551 0 0 1 0-7.102Zm7.564 3.726c1.614 0 2.923.637 2.923 1.956v3.744h.79a1.002 1.002 0 0 0 .977-1.196L18.423.856a.992.992 0 0 0-.964-.856H3.344a.99.99 0 0 0-.982 1.13l.872 6.071c.07.494.512.8711 1.012.8711h9.905v.2c0 .548-.567 1.002-1.282 1.002H7.669c-2.316 0-4.195-1.554-4.195-3.473V4.945C3.474 2.213 5.342 0 7.644 0h11.233L20.89 13.999a2.981 2.981 0 0 1-2.909 3.578h-.572a.992.992 0 0 0-.992.993v2.858c0 .548-.574 1.002-1.282 1.002H9.083l-4.526 2.45a2.155 2.155 0 0 1-1.026.257H1.587a.991.991 0 0 1-.991-.991v-2.072c0-1.874 1.83-3.41 4.103-3.41h10.453v.19c0-1.309-1.309-1.946-2.923-1.946h-3.486A5.513 5.513 0 0 1 3.474 11.29V8.657a.992.992 0 0 1 .992-.992h10.685Zm-7.564.846a.735.735 0 1 0 0 1.47.735.735 0 0 0 0-1.47Z"/></svg>`
       };
 
-      const connectionRows = connections.map(c => `
-        <tr>
-          <td><div style="display:flex;align-items:center;gap:8px;">${icons[c.provider] || ''} ${escapeHtml(c.provider)}</div></td>
-          <td>${escapeHtml(c.email || '')}</td>
-          <td>${escapeHtml(c.status)}</td>
-          <td>
+      const connectionCards = connections.map(c => `
+        <div class="calendar-connection-card">
+          <div class="calendar-connection-info">
+            <div class="calendar-connection-icon">${icons[c.provider] || ''}</div>
+            <div>
+              <div class="calendar-connection-email">${escapeHtml(c.email || '')}</div>
+              <div class="calendar-connection-provider">${escapeHtml(c.provider.charAt(0).toUpperCase() + c.provider.slice(1))}</div>
+            </div>
+          </div>
+          <div class="calendar-connection-actions">
+            <span class="calendar-connection-status status-${c.status}">${escapeHtml(c.status)}</span>
             <form method="POST" action="/admin/calendars/${c.id}/disconnect" style="display:inline">
               <input type="hidden" name="_csrf" value="${token}">
-              <button type="submit" class="danger">Disconnect</button>
+              <button type="submit" class="btn-disconnect"><i class="ph-bold ph-plug"></i> Disconnect</button>
             </form>
-          </td>
-        </tr>
+          </div>
+        </div>
       `).join('');
 
       const googleConfigured = !!(googleClientId && googleClientSecret && googleRedirectUri);
@@ -587,8 +698,8 @@ function buildApp(opts = {}) {
       const zohoConfigured = !!(zohoClientId && zohoClientSecret && zohoRedirectUri);
 
       const connectBtn = (href, label, svg, configured) => configured
-        ? `<a href="${href}" role="button" class="outline" style="display:inline-flex;align-items:center;gap:8px;background:var(--neutral-0);">${svg} ${label}</a>`
-        : `<a role="button" class="secondary outline" aria-disabled="true" style="pointer-events:none;opacity:0.5;display:inline-flex;align-items:center;gap:8px;background:var(--neutral-0);" title="Not configured">${svg} ${label}</a>`;
+        ? `<a href="${href}" class="calendar-connect-btn">${svg} <span>${label}</span></a>`
+        : `<a class="calendar-connect-btn disabled" title="Not configured">${svg} <span>${label}</span></a>`;
 
       const missingVars = [];
       if (!googleConfigured) missingVars.push('Google (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI)');
@@ -598,19 +709,52 @@ function buildApp(opts = {}) {
         ? `<details><summary>Some providers are not configured</summary><p>Add the following to your <code>.env</code> file:</p><ul>${missingVars.map(v => `<li>${v}</li>`).join('')}</ul></details>`
         : '';
 
-      reply.type('text/html').send(BASE_LAYOUT('Calendar Connections', `\n        <h1>Calendar Connections</h1>
-        ${configNotice}
-        <div class="card" style="display: flex; gap: 1rem; flex-wrap: wrap;">
-          ${connectBtn('/admin/calendars/connect/google', 'Connect Google Calendar', icons.google, googleConfigured)}
-          ${connectBtn('/admin/calendars/connect/microsoft', 'Connect Office 365 Calendar', icons.microsoft, msConfigured)}
-          ${connectBtn('/admin/calendars/connect/zoho', 'Connect Zoho Calendar', icons.zoho, zohoConfigured)}
+      reply.type('text/html').send(BASE_LAYOUT('Calendar Connections', `
+        <div class="calendars-page">
+          <div class="calendars-header">
+            <h1>Calendar Connections</h1>
+            <p class="calendars-subtitle">Connect your calendar accounts to sync availability and create events.</p>
+          </div>
+          ${configNotice}
+          <div class="calendars-connect-section">
+            <span class="field-label" style="margin-bottom: 12px; display: block;">Add a calendar</span>
+            <div class="calendar-connect-grid">
+              ${connectBtn('/admin/calendars/connect/google', 'Connect Google Calendar', icons.google, googleConfigured)}
+              ${connectBtn('/admin/calendars/connect/microsoft', 'Connect Office 365', icons.microsoft, msConfigured)}
+              ${connectBtn('/admin/calendars/connect/zoho', 'Connect Zoho Calendar', icons.zoho, zohoConfigured)}
+            </div>
+          </div>
+          ${connections.length ? `
+            <div class="calendars-list-section">
+              <span class="field-label" style="margin-bottom: 12px; display: block;">Connected accounts</span>
+              <div class="calendar-connections-list">
+                ${connectionCards}
+              </div>
+            </div>
+          ` : `
+            <div class="calendars-empty">
+              <div class="calendars-empty-icon">
+                <i class="ph-duotone ph-calendar-plus"></i>
+              </div>
+              <h3>No calendars connected</h3>
+              <p>Connect a calendar account above to start syncing your availability and automatically create events for bookings.</p>
+              <div class="calendars-empty-features">
+                <div class="calendars-empty-feature">
+                  <i class="ph-duotone ph-arrows-clockwise"></i>
+                  <span>Real-time sync</span>
+                </div>
+                <div class="calendars-empty-feature">
+                  <i class="ph-duotone ph-shield-check"></i>
+                  <span>Conflict detection</span>
+                </div>
+                <div class="calendars-empty-feature">
+                  <i class="ph-duotone ph-bell-ringing"></i>
+                  <span>Auto reminders</span>
+                </div>
+              </div>
+            </div>
+          `}
         </div>
-        ${connections.length ? `
-          <table>
-            <thead><tr><th>Provider</th><th>Email</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody>${connectionRows}</tbody>
-          </table>
-        ` : '<article><p>No calendar connections yet. Connect your calendar to get started.</p></article>'}
       `, true, 'calendars'));
     });
 

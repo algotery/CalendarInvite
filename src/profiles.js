@@ -176,8 +176,15 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
     `<label><input type="checkbox" name="read_calendar_ids[]" value="${c.id}" ${readCalendarIds.includes(c.id) ? 'checked' : ''}> ${escapeHtml(c.email)} (${c.provider})</label>`
   ).join('');
 
-  const attendeeValue = attendees.length > 0 ? escapeHtml(attendees.join(', ')) : '';
-  const attendeeInputs = `<input type="text" name="attendees[]" value="${attendeeValue}" placeholder="colleague@example.com, other@example.com">`;
+  const attendeeJsonArr = JSON.stringify(attendees);
+  const attendeeInputs = `
+    <div class="guests-section">
+      <div class="guests-input-area open" style="max-height:200px;opacity:1;padding:10px 12px;">
+        <div class="guests-tags" id="profile-guests-tags"></div>
+        <input type="text" id="profile-guests-input" class="guests-text-input" placeholder="Enter email address">
+        <input type="hidden" name="attendees[]" id="profile-attendees-hidden">
+      </div>
+    </div>`;
 
   const scheduleHtml = `<div class="schedule-grid">` + DAYS.map((dayName, dayIdx) => {
     const daySchedules = (schedules.templates || []).filter(s => s.day_of_week === dayIdx);
@@ -258,16 +265,14 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <label>
-                Slug
-                <input type="text" name="slug" value="${escapeHtml(profile?.slug || '')}" placeholder="my-booking-page" required>
-                <small style="color: var(--text-secondary);">URL-friendly identifier (e.g., my-meeting). Will be used in /book/slug</small>
-              </label>
-
-              <label>
-                Display Name
+              <div class="field-group">
+                <span class="field-label">Slug</span>
+                <input type="text" name="slug" value="${escapeHtml(profile?.slug || '')}" placeholder="my-meeting" required>
+              </div>
+              <div class="field-group">
+                <span class="field-label">Display Name</span>
                 <input type="text" name="name" value="${escapeHtml(profile?.name || '')}" placeholder="30 Min Meeting" required>
-              </label>
+              </div>
             </div>
           </div>
 
@@ -281,32 +286,29 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <div>
-                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px;">Buffer Time Between Meetings</div>
+              <div class="field-group">
+                <span class="field-label">Buffer Time</span>
                 <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-                  <div style="display: flex; align-items: center; gap: 8px; background: var(--neutral-10); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 16px;">
+                  <div style="display: flex; align-items: center; gap: 8px; background: var(--neutral-10); border: 1px solid var(--neutral-30); border-radius: 8px; padding: 10px 16px;">
                     <input
                       type="number"
                       id="buffer_time_minutes"
                       name="buffer_time_minutes"
                       value="${profile?.buffer_time_minutes ?? 0}"
                       min="0" max="120" step="5"
-                      style="width: 64px; font-size: 22px; font-weight: 700; text-align: center; border: none; background: transparent; color: var(--primary); margin: 0; padding: 0; -moz-appearance: textfield;"
+                      style="width: 56px; font-size: 20px; font-weight: 700; text-align: center; border: none; background: transparent; color: var(--primary); margin: 0; padding: 0; -moz-appearance: textfield;"
                     >
-                    <span style="font-size: 13px; color: var(--text-secondary); line-height: 1.3;">min<br>buffer</span>
+                    <span style="font-size: 13px; color: var(--text-secondary);">min</span>
                   </div>
                   <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                     ${[0, 5, 10, 15, 30].map(v => `
                       <button type="button"
                         onclick="document.getElementById('buffer_time_minutes').value=${v}"
-                        style="padding: 6px 14px; font-size: 13px; font-weight: 600; border-radius: 20px; border: 1.5px solid var(--border-color); background: ${(profile?.buffer_time_minutes ?? 0) == v ? 'var(--primary)' : 'var(--neutral-0)'}; color: ${(profile?.buffer_time_minutes ?? 0) == v ? '#fff' : 'var(--text-secondary)'}; cursor: pointer; transition: all 0.15s;">
+                        style="padding: 6px 14px; font-size: 13px; font-weight: 600; border-radius: 20px; border: 1.5px solid var(--neutral-30); background: ${(profile?.buffer_time_minutes ?? 0) == v ? 'var(--primary)' : 'var(--neutral-0)'}; color: ${(profile?.buffer_time_minutes ?? 0) == v ? '#fff' : 'var(--text-secondary)'}; cursor: pointer; transition: all 0.15s;">
                         ${v === 0 ? 'None' : v + ' min'}
                       </button>`).join('')}
                   </div>
                 </div>
-                <p style="margin-top: 8px; font-size: 12px; color: var(--text-secondary); margin-bottom: 0;">
-                  Adds a gap before and after each booking. A 15 min buffer means no new booking can start within 15 min of an existing one.
-                </p>
               </div>
             </div>
           </div>
@@ -321,20 +323,18 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <label>
-                Meeting Link URL
+              <div class="field-group">
+                <span class="field-label">Meeting Link</span>
                 <input type="url" name="meeting_link_url" value="${escapeHtml(profile?.meeting_link_url || '')}" placeholder="https://meet.google.com/abc-defg-hij">
-                <small style="color: var(--text-secondary);">Static meeting room URL (optional)</small>
-              </label>
-
-              <label>
-                Meeting Tool
+              </div>
+              <div class="field-group">
+                <span class="field-label">Meeting Tool</span>
                 <select name="meeting_tool">
-                  <option value="">-- None --</option>
+                  <option value="">None</option>
                   <option value="meet" ${profile?.meeting_tool === 'meet' ? 'selected' : ''}>Google Meet</option>
                   <option value="teams" ${profile?.meeting_tool === 'teams' ? 'selected' : ''}>Microsoft Teams</option>
                 </select>
-              </label>
+              </div>
             </div>
           </div>
 
@@ -348,15 +348,17 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <label style="display: block; font-weight: 600;">Write Calendars</label>
-              <small style="color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Calendars where bookings will be created</small>
-              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                ${writeCalendarCheckboxes || '<p style="color: var(--text-secondary);">No calendar connections available.</p>'}
+              <div class="field-group">
+                <span class="field-label">Write Calendars</span>
+                <div class="checkbox-group">
+                  ${writeCalendarCheckboxes || '<p style="color: var(--text-secondary); margin: 0; font-size: 0.875rem;">No calendar connections available.</p>'}
+                </div>
               </div>
-
-              <label style="margin-top: 1rem; display: block; font-weight: 600;">Read Calendars (for availability)</label>
-              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                ${readCalendarCheckboxes || '<p style="color: var(--text-secondary);">No calendar connections available. <a href="/admin/calendars">Connect a calendar</a></p>'}
+              <div class="field-group">
+                <span class="field-label">Read Calendars</span>
+                <div class="checkbox-group">
+                  ${readCalendarCheckboxes || '<p style="color: var(--text-secondary); margin: 0; font-size: 0.875rem;">No connections. <a href="/admin/calendars">Connect</a></p>'}
+                </div>
               </div>
             </div>
           </div>
@@ -371,7 +373,6 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <small style="color: var(--text-secondary); display: block; margin-bottom: 1rem;">Set your recurring availability for each day of the week</small>
               ${scheduleHtml}
             </div>
           </div>
@@ -386,8 +387,6 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <small style="color: var(--text-secondary); display: block; margin-bottom: 1rem;">Add specific dates where you are unavailable or have custom hours.</small>
-
               <table id="overrides-table" style="${overrides && overrides.length ? '' : 'display:none;'}">
                 <thead><tr><th>Date</th><th>Type</th><th>Hours</th><th>Actions</th></tr></thead>
                 <tbody id="overrides-tbody">${(overrides || []).map(o => {
@@ -413,26 +412,25 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               </table>
               <p id="no-overrides-msg" style="${overrides && overrides.length ? 'display:none;' : ''}">No overrides configured.</p>
 
-              <div style="margin-top: 1rem; border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px;">
-                <h4 style="margin-top: 0; margin-bottom: 1rem;">Add New Override</h4>
-                <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end;">
-                  <div style="display: flex; flex-direction: column; margin-bottom: 0;">
-                    <label for="new_override_date" style="margin-bottom: 0.25rem; font-size: 0.875rem;">Date</label>
-                    <input type="date" id="new_override_date" style="margin-bottom: 0;">
+              <div style="margin-top: 1rem; border: 1px solid var(--neutral-30); padding: 16px; border-radius: 8px; background: var(--neutral-10);">
+                <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">
+                  <div style="display: flex; flex-direction: column;">
+                    <span class="field-label">Date</span>
+                    <input type="date" id="new_override_date" style="margin-bottom: 0; width: auto;">
                   </div>
-                  <div style="display: flex; flex-direction: column; margin-bottom: 0;">
-                    <label for="new_override_type" style="margin-bottom: 0.25rem; font-size: 0.875rem;">Type</label>
-                    <select id="new_override_type" style="margin-bottom: 0;">
+                  <div style="display: flex; flex-direction: column;">
+                    <span class="field-label">Type</span>
+                    <select id="new_override_type" style="margin-bottom: 0; width: auto;">
                       <option value="blocked">Block entire day</option>
                       <option value="custom">Custom hours</option>
                     </select>
                   </div>
-                  <div id="new_override_custom" style="display:none; gap: 0.5rem; align-items: center; margin-bottom: 0;">
-                    <input type="text" class="time-picker-override" id="new_override_start" value="09:00" style="width: 100px; margin-bottom: 0;">
-                    <span style="margin-bottom: 0;">-</span>
-                    <input type="text" class="time-picker-override" id="new_override_end" value="17:00" style="width: 100px; margin-bottom: 0;">
+                  <div id="new_override_custom" style="display:none; gap: 8px; align-items: center;">
+                    <input type="text" class="time-picker-override" id="new_override_start" value="09:00" style="width: 90px; margin-bottom: 0;">
+                    <span>-</span>
+                    <input type="text" class="time-picker-override" id="new_override_end" value="17:00" style="width: 90px; margin-bottom: 0;">
                   </div>
-                  <button type="button" id="add-override-btn" class="outline" style="margin-bottom: 0; padding-top: 0.5rem; padding-bottom: 0.5rem;">Add Override</button>
+                  <button type="button" id="add-override-btn" class="outline" style="margin-bottom: 0; padding: 8px 16px; font-size: 0.8125rem;">Add</button>
                 </div>
               </div>
             </div>
@@ -448,8 +446,10 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <small style="color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Email addresses to include in every booking (separate multiple emails with commas)</small>
-              ${attendeeInputs}
+              <div class="field-group">
+                <span class="field-label">Emails</span>
+                ${attendeeInputs}
+              </div>
             </div>
           </div>
         </form>
@@ -620,6 +620,61 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             setTimeout(() => { e.target.textContent = originalText; }, 2000);
           });
         });
+
+        // Profile guests tag input
+        (function() {
+          var guests = ${attendeeJsonArr};
+          var input = document.getElementById('profile-guests-input');
+          var tagsContainer = document.getElementById('profile-guests-tags');
+          var hiddenInput = document.getElementById('profile-attendees-hidden');
+
+          function isValidEmail(email) {
+            return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email);
+          }
+
+          function renderTags() {
+            tagsContainer.innerHTML = guests.map(function(email, i) {
+              return '<span class="guest-tag">' + email + '<button type="button" data-idx="' + i + '" class="remove-guest-tag">\\u00d7</button></span>';
+            }).join('');
+            hiddenInput.value = guests.join(',');
+          }
+
+          function addGuest(email) {
+            email = email.trim();
+            if (email && isValidEmail(email) && guests.indexOf(email) === -1) {
+              guests.push(email);
+              renderTags();
+            }
+          }
+
+          tagsContainer.addEventListener('click', function(e) {
+            if (e.target.classList.contains('remove-guest-tag')) {
+              guests.splice(parseInt(e.target.dataset.idx), 1);
+              renderTags();
+            }
+          });
+
+          input.addEventListener('keydown', function(e) {
+            if (e.key === ' ' || e.key === 'Enter' || e.key === ',') {
+              e.preventDefault();
+              addGuest(input.value);
+              input.value = '';
+            }
+            if (e.key === 'Backspace' && !input.value && guests.length > 0) {
+              guests.pop();
+              renderTags();
+            }
+          });
+
+          input.addEventListener('blur', function() {
+            if (input.value.trim()) {
+              addGuest(input.value);
+              input.value = '';
+            }
+          });
+
+          renderTags();
+        })();
       });
     </script>
   `;
@@ -694,7 +749,13 @@ function registerProfileRoutes(app) {
         </div>
 
         <div class="profiles-list">
-          ${rows || '<div class="empty-state"><p>No profiles yet. Create your first one!</p><a href="/admin/profiles/new" role="button" class="contrast">+ Create Profile</a></div>'}
+          ${rows || `<div class="calendars-empty">
+              <div class="calendars-empty-icon">
+                <i class="ph-duotone ph-user-circle-plus"></i>
+              </div>
+              <h3>No profiles yet</h3>
+              <a href="/admin/profiles/new" class="btn-primary" style="margin-top: 16px;"><i class="ph-bold ph-plus"></i> Create Profile</a>
+            </div>`}
         </div>
       </div>
 

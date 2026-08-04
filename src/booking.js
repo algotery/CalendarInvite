@@ -338,11 +338,16 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
                   Email *
                   <input type="email" name="email" placeholder="your.email@example.com" required>
                 </label>
-                <label>
-                  Additional Attendees
-                  <input type="text" name="additional_attendees" placeholder="colleague@example.com, other@example.com">
-                  <small style="color: var(--text-secondary);">Separate multiple emails with commas</small>
-                </label>
+                <div class="guests-section">
+                  <button type="button" id="add-guests-btn" class="add-guests-btn" onclick="toggleGuestsInput()">
+                    <i class="ph-bold ph-user-plus"></i> Add Guests
+                  </button>
+                  <div id="guests-input-area" class="guests-input-area">
+                    <div class="guests-tags" id="guests-tags"></div>
+                    <input type="text" id="guests-text-input" class="guests-text-input" placeholder="Enter email address">
+                    <input type="hidden" name="additional_attendees" id="additional_attendees_hidden">
+                  </div>
+                </div>
                 <label>
                   Meeting Title
                   <input type="text" name="title" placeholder="Meeting with ${escapeHtml(profile.name)}">
@@ -598,7 +603,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
             submitBtn.textContent = 'Creating booking...';
             submitBtn.disabled = true;
 
-            var attendeesRaw = form.additional_attendees.value.trim();
+            var attendeesRaw = document.getElementById('additional_attendees_hidden').value.trim();
             var additionalAttendees = attendeesRaw ? attendeesRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
 
             var payload = {
@@ -661,6 +666,64 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               submitBtn.textContent = 'Confirm Booking';
               submitBtn.disabled = false;
             });
+          });
+        })();
+
+        function toggleGuestsInput() {
+          var btn = document.getElementById('add-guests-btn');
+          var area = document.getElementById('guests-input-area');
+          btn.style.display = 'none';
+          area.classList.add('open');
+          document.getElementById('guests-text-input').focus();
+        }
+
+        (function() {
+          var guests = [];
+          var input = document.getElementById('guests-text-input');
+          var tagsContainer = document.getElementById('guests-tags');
+          var hiddenInput = document.getElementById('additional_attendees_hidden');
+
+          function isValidEmail(email) {
+            return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email);
+          }
+
+          function renderTags() {
+            tagsContainer.innerHTML = guests.map(function(email, i) {
+              return '<span class="guest-tag">' + email + '<button type="button" onclick="removeGuest(' + i + ')">×</button></span>';
+            }).join('');
+            hiddenInput.value = guests.join(',');
+          }
+
+          function addGuest(email) {
+            email = email.trim();
+            if (email && isValidEmail(email) && guests.indexOf(email) === -1) {
+              guests.push(email);
+              renderTags();
+            }
+          }
+
+          window.removeGuest = function(idx) {
+            guests.splice(idx, 1);
+            renderTags();
+          };
+
+          input.addEventListener('keydown', function(e) {
+            if (e.key === ' ' || e.key === 'Enter' || e.key === ',') {
+              e.preventDefault();
+              addGuest(input.value);
+              input.value = '';
+            }
+            if (e.key === 'Backspace' && !input.value && guests.length > 0) {
+              guests.pop();
+              renderTags();
+            }
+          });
+
+          input.addEventListener('blur', function() {
+            if (input.value.trim()) {
+              addGuest(input.value);
+              input.value = '';
+            }
           });
         })();
       </script>
