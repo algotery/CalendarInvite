@@ -744,45 +744,7 @@ function registerProfileRoutes(app) {
     const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE status = 'connected'").all();
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
     const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, null, [], adminTimezone);
-
-    // Send a full HTML page without the sidebar layout
-    const fullPage = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>New Profile - CalendarInvite</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-  <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css">
-  <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <link rel="stylesheet" href="/css/styles.css">
-</head>
-<body>
-  ${html}
-  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      if (typeof flatpickr !== 'undefined') {
-        window.initTimePickers = function() {
-          flatpickr(".time-picker:not(.flatpickr-input)", {
-            enableTime: true,
-            noCalendar: true,
-            dateFormat: "H:i",
-            altInput: true,
-            altFormat: "h:i K",
-            minuteIncrement: 1
-          });
-        };
-        window.initTimePickers();
-      }
-    });
-  </script>
-</body>
-</html>`;
-    reply.type('text/html').send(fullPage);
+    reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
   });
 
   app.post('/profiles', { preHandler: app.csrfProtection }, async (request, reply) => {
@@ -868,45 +830,7 @@ function registerProfileRoutes(app) {
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
 
     const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds, writeCalendarIds }, null, overrides, adminTimezone);
-
-    // Send a full HTML page without the sidebar layout
-    const fullPage = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Edit Profile - CalendarInvite</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-  <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css">
-  <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <link rel="stylesheet" href="/css/styles.css">
-</head>
-<body>
-  ${html}
-  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      if (typeof flatpickr !== 'undefined') {
-        window.initTimePickers = function() {
-          flatpickr(".time-picker:not(.flatpickr-input)", {
-            enableTime: true,
-            noCalendar: true,
-            dateFormat: "H:i",
-            altInput: true,
-            altFormat: "h:i K",
-            minuteIncrement: 1
-          });
-        };
-        window.initTimePickers();
-      }
-    });
-  </script>
-</body>
-</html>`;
-    reply.type('text/html').send(fullPage);
+    reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
   });
 
   app.post('/profiles/:id', { preHandler: app.csrfProtection }, async (request, reply) => {
