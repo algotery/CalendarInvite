@@ -182,7 +182,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
   const scheduleHtml = `<div class="schedule-grid">` + DAYS.map((dayName, dayIdx) => {
     const daySchedules = (schedules.templates || []).filter(s => s.day_of_week === dayIdx);
     const isActive = daySchedules.length > 0;
-    
+
     let rangesHtml = '';
     if (isActive) {
       rangesHtml = daySchedules.map(s => {
@@ -216,116 +216,265 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
 
   const overrideSection = overridesHtml(overrides || []);
 
+  // Calculate summaries for accordion sections
+  const slugSummary = profile?.slug ? escapeHtml(profile.slug) : 'Not set';
+  const bufferSummary = (profile?.buffer_time_minutes ?? 0) > 0 ? `${profile.buffer_time_minutes} min buffer` : 'No buffer';
+  const locationSummary = profile?.meeting_tool === 'meet' ? 'Google Meet' : profile?.meeting_tool === 'teams' ? 'Microsoft Teams' : 'No location set';
+  const writeCalCount = writeCalendarIds.length;
+  const readCalCount = readCalendarIds.length;
+  const calendarSummary = (writeCalCount + readCalCount) > 0 ? `${writeCalCount + readCalCount} connected` : 'No calendars';
+
+  const activeDays = DAYS.filter((_, idx) => (schedules.templates || []).some(s => s.day_of_week === idx));
+  const availabilitySummary = activeDays.length > 0 ? `${activeDays.length} days configured` : 'No availability set';
+
+  const overrideCount = (overrides || []).length;
+  const overrideSummary = overrideCount > 0 ? `${overrideCount} override${overrideCount > 1 ? 's' : ''}` : 'No overrides';
+
+  const attendeeCount = attendees.length;
+  const attendeeSummary = attendeeCount > 0 ? `${attendeeCount} attendee${attendeeCount > 1 ? 's' : ''}` : 'None';
+
   return `
-    <h1>${title}</h1>
-    ${error ? `<div role="alert" class="error">${escapeHtml(error)}</div>` : ''}
-    <div class="card">
-      <form method="POST" action="${action}">
-        <input type="hidden" name="_csrf" value="${token}">
+    <div class="floating-modal-backdrop">
+      <div class="floating-modal">
+        <div class="floating-modal-header">
+          <a href="/admin/profiles" class="floating-modal-close"><i class="ph-bold ph-x"></i></a>
+          <span class="floating-modal-label">Event type</span>
+          <h1 class="floating-modal-title"><span class="floating-modal-dot"></span> ${escapeHtml(profile?.name || 'New Profile')}</h1>
+          <span class="floating-modal-subtitle">One-on-One</span>
+        </div>
 
-        <fieldset>
-          <legend>Profile Settings</legend>
-          <label>
-            Slug
-            <input type="text" name="slug" value="${escapeHtml(profile?.slug || '')}" placeholder="my-booking-page" required>
-            <small style="color: var(--text-secondary);">URL-friendly identifier (e.g., my-meeting). Will be used in /book/slug</small>
-          </label>
+        ${error ? `<div role="alert" class="error" style="margin: 16px 24px;">${escapeHtml(error)}</div>` : ''}
 
-          <label>
-            Display Name
-            <input type="text" name="name" value="${escapeHtml(profile?.name || '')}" placeholder="30 Min Meeting" required>
-          </label>
-        </fieldset>
+        <form id="profile-form" method="POST" action="${action}">
+          <input type="hidden" name="_csrf" value="${token}">
 
-        <fieldset>
-          <legend>Meeting Configuration</legend>
-          <label>
-            Meeting Link URL
-            <input type="url" name="meeting_link_url" value="${escapeHtml(profile?.meeting_link_url || '')}" placeholder="https://meet.google.com/abc-defg-hij">
-            <small style="color: var(--text-secondary);">Static meeting room URL (optional)</small>
-          </label>
-
-          <label>
-            Meeting Tool
-            <select name="meeting_tool">
-              <option value="">-- None --</option>
-              <option value="meet" ${profile?.meeting_tool === 'meet' ? 'selected' : ''}>Google Meet</option>
-              <option value="teams" ${profile?.meeting_tool === 'teams' ? 'selected' : ''}>Microsoft Teams</option>
-            </select>
-          </label>
-
-          <div style="margin-top: 0.5rem;">
-            <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px;">Buffer Time Between Meetings</div>
-            <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-              <div style="display: flex; align-items: center; gap: 8px; background: var(--neutral-10); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 16px;">
-                <input
-                  type="number"
-                  id="buffer_time_minutes"
-                  name="buffer_time_minutes"
-                  value="${profile?.buffer_time_minutes ?? 0}"
-                  min="0" max="120" step="5"
-                  style="width: 64px; font-size: 22px; font-weight: 700; text-align: center; border: none; background: transparent; color: var(--primary); margin: 0; padding: 0; -moz-appearance: textfield;"
-                >
-                <span style="font-size: 13px; color: var(--text-secondary); line-height: 1.3;">min<br>buffer</span>
+          <!-- Profile Settings Section -->
+          <div class="modal-section ${!isEdit ? 'open' : ''}">
+            <div class="modal-section-header" onclick="toggleSection(this)">
+              <div>
+                <h3 class="modal-section-title">Profile Settings</h3>
+                <p class="modal-section-summary">${slugSummary}</p>
               </div>
-              <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                ${[0, 5, 10, 15, 30].map(v => `
-                  <button type="button"
-                    onclick="document.getElementById('buffer_time_minutes').value=${v}"
-                    style="padding: 6px 14px; font-size: 13px; font-weight: 600; border-radius: 20px; border: 1.5px solid var(--border-color); background: ${(profile?.buffer_time_minutes ?? 0) == v ? 'var(--primary)' : 'var(--neutral-0)'}; color: ${(profile?.buffer_time_minutes ?? 0) == v ? '#fff' : 'var(--text-secondary)'}; cursor: pointer; transition: all 0.15s;">
-                    ${v === 0 ? 'None' : v + ' min'}
-                  </button>`).join('')}
+              <i class="ph-bold ph-caret-down modal-section-chevron"></i>
+            </div>
+            <div class="modal-section-content">
+              <label>
+                Slug
+                <input type="text" name="slug" value="${escapeHtml(profile?.slug || '')}" placeholder="my-booking-page" required>
+                <small style="color: var(--text-secondary);">URL-friendly identifier (e.g., my-meeting). Will be used in /book/slug</small>
+              </label>
+
+              <label>
+                Display Name
+                <input type="text" name="name" value="${escapeHtml(profile?.name || '')}" placeholder="30 Min Meeting" required>
+              </label>
+            </div>
+          </div>
+
+          <!-- Duration & Buffer Section -->
+          <div class="modal-section ${isEdit ? 'open' : ''}">
+            <div class="modal-section-header" onclick="toggleSection(this)">
+              <div>
+                <h3 class="modal-section-title">Duration & Buffer</h3>
+                <p class="modal-section-summary">${bufferSummary}</p>
+              </div>
+              <i class="ph-bold ph-caret-down modal-section-chevron"></i>
+            </div>
+            <div class="modal-section-content">
+              <div>
+                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px;">Buffer Time Between Meetings</div>
+                <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                  <div style="display: flex; align-items: center; gap: 8px; background: var(--neutral-10); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 16px;">
+                    <input
+                      type="number"
+                      id="buffer_time_minutes"
+                      name="buffer_time_minutes"
+                      value="${profile?.buffer_time_minutes ?? 0}"
+                      min="0" max="120" step="5"
+                      style="width: 64px; font-size: 22px; font-weight: 700; text-align: center; border: none; background: transparent; color: var(--primary); margin: 0; padding: 0; -moz-appearance: textfield;"
+                    >
+                    <span style="font-size: 13px; color: var(--text-secondary); line-height: 1.3;">min<br>buffer</span>
+                  </div>
+                  <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                    ${[0, 5, 10, 15, 30].map(v => `
+                      <button type="button"
+                        onclick="document.getElementById('buffer_time_minutes').value=${v}"
+                        style="padding: 6px 14px; font-size: 13px; font-weight: 600; border-radius: 20px; border: 1.5px solid var(--border-color); background: ${(profile?.buffer_time_minutes ?? 0) == v ? 'var(--primary)' : 'var(--neutral-0)'}; color: ${(profile?.buffer_time_minutes ?? 0) == v ? '#fff' : 'var(--text-secondary)'}; cursor: pointer; transition: all 0.15s;">
+                        ${v === 0 ? 'None' : v + ' min'}
+                      </button>`).join('')}
+                  </div>
+                </div>
+                <p style="margin-top: 8px; font-size: 12px; color: var(--text-secondary); margin-bottom: 0;">
+                  Adds a gap before and after each booking. A 15 min buffer means no new booking can start within 15 min of an existing one.
+                </p>
               </div>
             </div>
-            <p style="margin-top: 8px; font-size: 12px; color: var(--text-secondary); margin-bottom: 0;">
-              Adds a gap before and after each booking. A 15 min buffer means no new booking can start within 15 min of an existing one.
-            </p>
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>Calendar Integration</legend>
-          <label style="display: block; font-weight: 600;">Write Calendars</label>
-          <small style="color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Calendars where bookings will be created</small>
-          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-            ${writeCalendarCheckboxes || '<p style="color: var(--text-secondary);">No calendar connections available.</p>'}
           </div>
 
-          <label style="margin-top: 1rem; display: block; font-weight: 600;">Read Calendars (for availability)</label>
-          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-            ${readCalendarCheckboxes || '<p style="color: var(--text-secondary);">No calendar connections available. <a href="/admin/calendars">Connect a calendar</a></p>'}
+          <!-- Meeting Location Section -->
+          <div class="modal-section ${isEdit ? 'open' : ''}">
+            <div class="modal-section-header" onclick="toggleSection(this)">
+              <div>
+                <h3 class="modal-section-title">Meeting Location</h3>
+                <p class="modal-section-summary">${locationSummary}</p>
+              </div>
+              <i class="ph-bold ph-caret-down modal-section-chevron"></i>
+            </div>
+            <div class="modal-section-content">
+              <label>
+                Meeting Link URL
+                <input type="url" name="meeting_link_url" value="${escapeHtml(profile?.meeting_link_url || '')}" placeholder="https://meet.google.com/abc-defg-hij">
+                <small style="color: var(--text-secondary);">Static meeting room URL (optional)</small>
+              </label>
+
+              <label>
+                Meeting Tool
+                <select name="meeting_tool">
+                  <option value="">-- None --</option>
+                  <option value="meet" ${profile?.meeting_tool === 'meet' ? 'selected' : ''}>Google Meet</option>
+                  <option value="teams" ${profile?.meeting_tool === 'teams' ? 'selected' : ''}>Microsoft Teams</option>
+                </select>
+              </label>
+            </div>
           </div>
-        </fieldset>
 
-        <fieldset>
-          <legend>Default Attendees</legend>
-          <small style="color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Email addresses to include in every booking (separate multiple emails with commas)</small>
-          ${attendeeInputs}
-        </fieldset>
+          <!-- Calendar Integration Section -->
+          <div class="modal-section ${isEdit ? 'open' : ''}">
+            <div class="modal-section-header" onclick="toggleSection(this)">
+              <div>
+                <h3 class="modal-section-title">Calendar Integration</h3>
+                <p class="modal-section-summary">${calendarSummary}</p>
+              </div>
+              <i class="ph-bold ph-caret-down modal-section-chevron"></i>
+            </div>
+            <div class="modal-section-content">
+              <label style="display: block; font-weight: 600;">Write Calendars</label>
+              <small style="color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Calendars where bookings will be created</small>
+              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                ${writeCalendarCheckboxes || '<p style="color: var(--text-secondary);">No calendar connections available.</p>'}
+              </div>
 
-        <fieldset>
-          <legend>Weekly Schedule</legend>
-          <small style="color: var(--text-secondary); display: block; margin-bottom: 1rem;">Set your recurring availability for each day of the week</small>
-          ${scheduleHtml}
-        </fieldset>
+              <label style="margin-top: 1rem; display: block; font-weight: 600;">Read Calendars (for availability)</label>
+              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                ${readCalendarCheckboxes || '<p style="color: var(--text-secondary);">No calendar connections available. <a href="/admin/calendars">Connect a calendar</a></p>'}
+              </div>
+            </div>
+          </div>
 
-        ${overrideSection}
-        <div style="display: flex; gap: 1rem; align-items: center;">
-          <button type="submit">${isEdit ? 'Update' : 'Create'} Profile</button>
-          <a href="/admin/profiles" role="button" class="secondary">Cancel</a>
+          <!-- Availability Section -->
+          <div class="modal-section ${isEdit ? 'open' : ''}">
+            <div class="modal-section-header" onclick="toggleSection(this)">
+              <div>
+                <h3 class="modal-section-title">Availability</h3>
+                <p class="modal-section-summary">${availabilitySummary}</p>
+              </div>
+              <i class="ph-bold ph-caret-down modal-section-chevron"></i>
+            </div>
+            <div class="modal-section-content">
+              <small style="color: var(--text-secondary); display: block; margin-bottom: 1rem;">Set your recurring availability for each day of the week</small>
+              ${scheduleHtml}
+            </div>
+          </div>
+
+          <!-- Schedule Overrides Section -->
+          <div class="modal-section ${isEdit ? 'open' : ''}">
+            <div class="modal-section-header" onclick="toggleSection(this)">
+              <div>
+                <h3 class="modal-section-title">Schedule Overrides</h3>
+                <p class="modal-section-summary">${overrideSummary}</p>
+              </div>
+              <i class="ph-bold ph-caret-down modal-section-chevron"></i>
+            </div>
+            <div class="modal-section-content">
+              <small style="color: var(--text-secondary); display: block; margin-bottom: 1rem;">Add specific dates where you are unavailable or have custom hours.</small>
+
+              <table id="overrides-table" style="${overrides && overrides.length ? '' : 'display:none;'}">
+                <thead><tr><th>Date</th><th>Type</th><th>Hours</th><th>Actions</th></tr></thead>
+                <tbody id="overrides-tbody">${(overrides || []).map(o => {
+                  const isBlocked = o.is_blocked ? 1 : 0;
+                  const typeLabel = isBlocked ? 'Blocked' : 'Custom';
+                  let rangesDisplay = '';
+                  if (!isBlocked && o.custom_ranges) {
+                    const ranges = JSON.parse(o.custom_ranges);
+                    rangesDisplay = ranges.map(r => `${escapeHtml(r.start)} - ${escapeHtml(r.end)}`).join(', ');
+                  }
+                  return `<tr>
+                    <td>
+                      ${escapeHtml(o.date)}
+                      <input type="hidden" name="override_dates[]" value="${escapeHtml(o.date)}">
+                      <input type="hidden" name="override_is_blocked[]" value="${isBlocked}">
+                      <input type="hidden" name="override_custom_ranges[]" value="${escapeHtml(o.custom_ranges || '')}">
+                    </td>
+                    <td>${typeLabel}</td>
+                    <td>${rangesDisplay}</td>
+                    <td><button type="button" class="danger outline remove-override-btn" style="padding: 4px 8px; font-size: 12px;">Delete</button></td>
+                  </tr>`;
+                }).join('')}</tbody>
+              </table>
+              <p id="no-overrides-msg" style="${overrides && overrides.length ? 'display:none;' : ''}">No overrides configured.</p>
+
+              <div style="margin-top: 1rem; border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px;">
+                <h4 style="margin-top: 0; margin-bottom: 1rem;">Add New Override</h4>
+                <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end;">
+                  <div style="display: flex; flex-direction: column; margin-bottom: 0;">
+                    <label for="new_override_date" style="margin-bottom: 0.25rem; font-size: 0.875rem;">Date</label>
+                    <input type="date" id="new_override_date" style="margin-bottom: 0;">
+                  </div>
+                  <div style="display: flex; flex-direction: column; margin-bottom: 0;">
+                    <label for="new_override_type" style="margin-bottom: 0.25rem; font-size: 0.875rem;">Type</label>
+                    <select id="new_override_type" style="margin-bottom: 0;">
+                      <option value="blocked">Block entire day</option>
+                      <option value="custom">Custom hours</option>
+                    </select>
+                  </div>
+                  <div id="new_override_custom" style="display:none; gap: 0.5rem; align-items: center; margin-bottom: 0;">
+                    <input type="text" class="time-picker-override" id="new_override_start" value="09:00" style="width: 100px; margin-bottom: 0;">
+                    <span style="margin-bottom: 0;">-</span>
+                    <input type="text" class="time-picker-override" id="new_override_end" value="17:00" style="width: 100px; margin-bottom: 0;">
+                  </div>
+                  <button type="button" id="add-override-btn" class="outline" style="margin-bottom: 0; padding-top: 0.5rem; padding-bottom: 0.5rem;">Add Override</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Default Attendees Section -->
+          <div class="modal-section ${isEdit ? 'open' : ''}">
+            <div class="modal-section-header" onclick="toggleSection(this)">
+              <div>
+                <h3 class="modal-section-title">Default Attendees</h3>
+                <p class="modal-section-summary">${attendeeSummary}</p>
+              </div>
+              <i class="ph-bold ph-caret-down modal-section-chevron"></i>
+            </div>
+            <div class="modal-section-content">
+              <small style="color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Email addresses to include in every booking (separate multiple emails with commas)</small>
+              ${attendeeInputs}
+            </div>
+          </div>
+        </form>
+
+        <div class="floating-modal-footer">
+          <a href="/admin/profiles" class="btn-secondary">Cancel</a>
+          <button type="submit" form="profile-form" class="btn-primary">${isEdit ? 'Update' : 'Create'}</button>
           ${isEdit ? `
-          <button type="submit" form="delete-profile-form" class="danger outline" style="margin-left: auto;">Delete Profile</button>
+          <button type="submit" form="delete-profile-form" class="btn-danger">Delete</button>
           ` : ''}
         </div>
-      </form>
 
-      ${isEdit ? `
-      <form id="delete-profile-form" method="POST" action="/admin/profiles/${profile.id}/delete" style="display:none;" onsubmit="return confirm('Are you sure you want to delete this profile? All bookings and settings associated with it will be permanently deleted.');">
-        <input type="hidden" name="_csrf" value="${token}">
-      </form>
-      ` : ''}
+        ${isEdit ? `
+        <form id="delete-profile-form" method="POST" action="/admin/profiles/${profile.id}/delete" style="display:none;" onsubmit="return confirm('Are you sure you want to delete this profile? All bookings and settings associated with it will be permanently deleted.');">
+          <input type="hidden" name="_csrf" value="${token}">
+        </form>
+        ` : ''}
+      </div>
     </div>
     <script>
+      function toggleSection(header) {
+        const section = header.closest('.modal-section');
+        section.classList.toggle('open');
+      }
+
       document.addEventListener('DOMContentLoaded', () => {
         flatpickr('.time-picker-override', { enableTime: true, noCalendar: true, dateFormat: "H:i", time_24hr: true });
 
@@ -347,11 +496,11 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           const date = document.getElementById('new_override_date').value;
           const type = document.getElementById('new_override_type').value;
           if (!date) return alert('Please select a date.');
-          
+
           const isBlocked = type === 'blocked';
           let customRangesStr = '';
           let rangesDisplay = '';
-          
+
           if (!isBlocked) {
             const start = document.getElementById('new_override_start').value;
             const end = document.getElementById('new_override_end').value;
@@ -365,8 +514,8 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           const tr = document.createElement('tr');
           const typeLabel = isBlocked ? 'Blocked' : 'Custom';
           const escapeHtml = (str) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-          
-          tr.innerHTML = 
+
+          tr.innerHTML =
             '<td>' +
               escapeHtml(date) +
               '<input type="hidden" name="override_dates[]" value="' + escapeHtml(date) + '">' +
@@ -377,11 +526,12 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             '<td>' + rangesDisplay + '</td>' +
             '<td><button type="button" class="danger outline remove-override-btn" style="padding: 4px 8px; font-size: 12px;">Delete</button></td>';
           tbody.appendChild(tr);
-          
+
           document.getElementById('overrides-table').style.display = '';
           document.getElementById('no-overrides-msg').style.display = 'none';
           document.getElementById('new_override_date').value = '';
         });
+
         // Toggle Day
         document.querySelectorAll('.toggle-day-cb').forEach(cb => {
           cb.addEventListener('change', (e) => {
@@ -389,7 +539,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             const row = document.getElementById('day-row-' + day);
             const rangesDiv = document.getElementById('ranges-' + day);
             const unavailText = document.getElementById('unavail-' + day);
-            
+
             if (e.target.checked) {
               row.classList.remove('disabled');
               rangesDiv.style.display = 'block';
@@ -414,7 +564,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             const timeRange = e.target.closest('.time-range');
             const container = timeRange.parentElement;
             timeRange.remove();
-            
+
             if (container.children.length === 0) {
               const day = container.id.replace('container-', '');
               const cb = document.getElementById('toggle-' + day);
@@ -453,18 +603,18 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             });
 
             for (let i = 0; i <= 6; i++) {
-              if (i == sourceDay) continue; 
+              if (i == sourceDay) continue;
               const cb = document.getElementById('toggle-' + i);
               cb.checked = true;
               cb.dispatchEvent(new Event('change'));
-              
+
               const container = document.getElementById('container-' + i);
-              container.innerHTML = sourceInputs.map(val => 
+              container.innerHTML = sourceInputs.map(val =>
                 \`<div class="time-range"><input type="text" class="time-picker" name="schedule[\${i}][start][]" value="\${val.start}" required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"> <span>-</span> <input type="text" class="time-picker" name="schedule[\${i}][end][]" value="\${val.end}" required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"><button type="button" class="danger outline remove-range" style="padding:4px 8px; border:none;" title="Remove">✕</button></div>\`
               ).join('');
             }
             if(window.initTimePickers) window.initTimePickers();
-            
+
             const originalText = e.target.textContent;
             e.target.textContent = 'Copied!';
             setTimeout(() => { e.target.textContent = originalText; }, 2000);
@@ -594,7 +744,45 @@ function registerProfileRoutes(app) {
     const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE status = 'connected'").all();
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
     const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, null, [], adminTimezone);
-    reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
+
+    // Send a full HTML page without the sidebar layout
+    const fullPage = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>New Profile - CalendarInvite</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  ${html}
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      if (typeof flatpickr !== 'undefined') {
+        window.initTimePickers = function() {
+          flatpickr(".time-picker:not(.flatpickr-input)", {
+            enableTime: true,
+            noCalendar: true,
+            dateFormat: "H:i",
+            altInput: true,
+            altFormat: "h:i K",
+            minuteIncrement: 1
+          });
+        };
+        window.initTimePickers();
+      }
+    });
+  </script>
+</body>
+</html>`;
+    reply.type('text/html').send(fullPage);
   });
 
   app.post('/profiles', { preHandler: app.csrfProtection }, async (request, reply) => {
@@ -680,7 +868,45 @@ function registerProfileRoutes(app) {
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
 
     const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds, writeCalendarIds }, null, overrides, adminTimezone);
-    reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
+
+    // Send a full HTML page without the sidebar layout
+    const fullPage = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Edit Profile - CalendarInvite</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  ${html}
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      if (typeof flatpickr !== 'undefined') {
+        window.initTimePickers = function() {
+          flatpickr(".time-picker:not(.flatpickr-input)", {
+            enableTime: true,
+            noCalendar: true,
+            dateFormat: "H:i",
+            altInput: true,
+            altFormat: "h:i K",
+            minuteIncrement: 1
+          });
+        };
+        window.initTimePickers();
+      }
+    });
+  </script>
+</body>
+</html>`;
+    reply.type('text/html').send(fullPage);
   });
 
   app.post('/profiles/:id', { preHandler: app.csrfProtection }, async (request, reply) => {

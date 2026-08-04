@@ -55,7 +55,7 @@ describe('Booking Profile CRUD', () => {
         headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
       });
       assert.equal(response.statusCode, 200);
-      assert.ok(response.body.includes('Booking Profiles'));
+      assert.ok(response.body.includes('Profiles'));
     });
 
     it('shows created profiles with slug, name and status', async () => {
