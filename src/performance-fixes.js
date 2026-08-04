@@ -79,7 +79,7 @@ function clearTokenCache(connectionId) {
 
 // 4. Query optimization - batch queries
 function getBatchedBookings(db, adminTz, filters = {}) {
-  const { status, profile_id, limit = 100, offset = 0 } = filters;
+  const { status, profile_id, limit = 100, offset = 0, timeMin, timeMax } = filters;
 
   let where = [];
   let params = [];
@@ -91,6 +91,14 @@ function getBatchedBookings(db, adminTz, filters = {}) {
   if (profile_id) {
     where.push('b.profile_id = ?');
     params.push(parseInt(profile_id, 10));
+  }
+  if (timeMin) {
+    where.push('b.start_time >= ?');
+    params.push(timeMin);
+  }
+  if (timeMax) {
+    where.push('b.start_time < ?');
+    params.push(timeMax);
   }
 
   const whereClause = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';

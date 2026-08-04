@@ -33,7 +33,8 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '') => {
+const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage = false) => {
+  const bodyClass = isBookingPage ? ' class="booking-page"' : '';
   const content = isAdmin ? `
 <div class="app-layout">
   <aside class="sidebar">
@@ -81,7 +82,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '') => {
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
   <link rel="stylesheet" href="/css/styles.css">
 </head>
-<body>
+<body${bodyClass}>
   ${content}
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
   <script>
@@ -297,13 +298,50 @@ function buildApp(opts = {}) {
       const admin = app.db.prepare('SELECT timezone FROM admin WHERE id = ?').get(adminId);
       const adminTz = admin ? admin.timezone : 'UTC';
 
-      const { status, profile_id } = request.query;
+      const { status, profile_id, filter } = request.query;
+      const activeFilter = filter || 'upcoming';
 
-      // Use optimized batch query
+      const now = new Date();
+      let timeMin = null, timeMax = null;
+
+      if (activeFilter === 'today') {
+        const todayStart = new Date(now.toLocaleString('en-US', { timeZone: adminTz }));
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(todayStart);
+        todayEnd.setDate(todayEnd.getDate() + 1);
+        timeMin = todayStart.toISOString();
+        timeMax = todayEnd.toISOString();
+      } else if (activeFilter === 'upcoming') {
+        timeMin = null;
+        timeMax = null;
+      } else if (activeFilter === 'this_week') {
+        const todayLocal = new Date(now.toLocaleString('en-US', { timeZone: adminTz }));
+        const dayOfWeek = todayLocal.getDay();
+        const monday = new Date(todayLocal);
+        monday.setDate(todayLocal.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+        monday.setHours(0, 0, 0, 0);
+        const sunday = new Date(monday);
+        sunday.setDate(monday.getDate() + 7);
+        timeMin = monday.toISOString();
+        timeMax = sunday.toISOString();
+      } else if (activeFilter === 'last_week') {
+        const todayLocal = new Date(now.toLocaleString('en-US', { timeZone: adminTz }));
+        const dayOfWeek = todayLocal.getDay();
+        const thisMonday = new Date(todayLocal);
+        thisMonday.setDate(todayLocal.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+        thisMonday.setHours(0, 0, 0, 0);
+        const lastMonday = new Date(thisMonday);
+        lastMonday.setDate(thisMonday.getDate() - 7);
+        timeMin = lastMonday.toISOString();
+        timeMax = thisMonday.toISOString();
+      }
+
       const bookings = getBatchedBookings(app.db, adminTz, {
         status,
         profile_id,
-        limit: 100, // Show all bookings without pagination for better UX
+        timeMin,
+        timeMax,
+        limit: 100,
         offset: 0
       });
 
@@ -311,8 +349,7 @@ function buildApp(opts = {}) {
       const formatterTime = new Intl.DateTimeFormat('en-GB', { timeZone: adminTz, hour: '2-digit', minute: '2-digit', hour12: false });
 
       const grouped = {};
-      const today = new Date();
-      const todayStr = formatterDate.format(today).replace(',', '');
+      const todayStr = formatterDate.format(now).replace(',', '');
 
       bookings.forEach(b => {
         const start = new Date(b.start_time);
@@ -323,13 +360,16 @@ function buildApp(opts = {}) {
         grouped[dateKey].meetings.push(b);
       });
 
-      // Check if we need to show today section even if no meetings
-      let hasTodayMeetings = grouped[todayStr] !== undefined;
-
       let rowsHtml = '';
-
-      // Show past/upcoming meetings first
-      const sortedDates = Object.entries(grouped).sort((a, b) => a[1].date - b[1].date);
+      const nowMs = now.getTime();
+      const sortedDates = Object.entries(grouped).sort((a, b) => {
+        const aFuture = a[1].date.getTime() >= nowMs;
+        const bFuture = b[1].date.getTime() >= nowMs;
+        if (aFuture && !bFuture) return -1;
+        if (!aFuture && bFuture) return 1;
+        if (aFuture && bFuture) return a[1].date - b[1].date;
+        return b[1].date - a[1].date;
+      });
 
       for (const [dateStr, group] of sortedDates) {
          const isToday = dateStr === todayStr;
@@ -353,18 +393,20 @@ function buildApp(opts = {}) {
               : `<span class="badge error">Cancelled</span>`;
 
             rowsHtml += `
-              <div class="meeting-row">
+              <div class="meeting-row" data-status="${escapeHtml(b.status)}">
                 <div class="meeting-time">
                   ${startTimeStr} - ${endTimeStr}
+                  <span class="meeting-duration">${b.duration_minutes} min</span>
                 </div>
                 <div class="meeting-details">
                   <div class="meeting-dot"></div>
                   <span class="meeting-title">${escapeHtml(b.title || b.profile_name)}</span>
                   <span class="meeting-booker">with ${escapeHtml(b.booker_name)}</span>
+                  <span class="meeting-profile">${escapeHtml(b.profile_name)}</span>
                 </div>
                 <div class="meeting-actions">
                   <a href="mailto:${escapeHtml(b.booker_email)}" class="icon-btn" title="Email Booker"><i class="ph-bold ph-envelope-simple"></i></a>
-                  ${b.status === 'confirmed' ? cancelBtn : cancelBtn}
+                  ${cancelBtn}
                 </div>
               </div>
             `;
@@ -375,35 +417,18 @@ function buildApp(opts = {}) {
          `;
       }
 
-      // If no meetings today and we have other meetings, show today section with empty state
-      if (!hasTodayMeetings && sortedDates.length > 0) {
-        rowsHtml += `
-          <div class="meeting-day-group">
-            <div class="meeting-day-header">
-              ${escapeHtml(todayStr)} <span class="today-badge">Today</span>
-            </div>
-            <div class="current-time-line"></div>
-            <div class="meetings-empty">
-              <div class="meetings-empty-icon"><i class="ph-duotone ph-calendar-blank"></i></div>
-              <h3>You're all caught up!</h3>
-              <p>No upcoming meetings. Enjoy the open time, or schedule new meetings.</p>
-              <a href="/" target="_blank" role="button" class="contrast outline">Schedule a meeting</a>
-            </div>
-          </div>
-        `;
-      }
-
-      // If no meetings at all, show empty state
       if (sortedDates.length === 0) {
         rowsHtml = `
           <div class="meetings-empty">
             <div class="meetings-empty-icon"><i class="ph-duotone ph-calendar-blank"></i></div>
             <h3>You're all caught up!</h3>
-            <p>No upcoming meetings. Enjoy the open time, or schedule new meetings.</p>
-            <a href="/" target="_blank" role="button" class="contrast outline">Schedule a meeting</a>
+            <p>No meetings found for this filter.</p>
           </div>
         `;
       }
+
+      const dateDisplay = now.toLocaleDateString('en-US', { timeZone: adminTz, weekday: 'short', month: 'short', day: '2-digit', year: 'numeric' });
+      const meetingCount = bookings.length;
 
       reply.type('text/html').send(BASE_LAYOUT('Bookings', `
         <div class="page-header-top">
@@ -412,14 +437,17 @@ function buildApp(opts = {}) {
 
         <div class="meetings-filter-bar">
           <div class="meetings-filter-left">
-            <button class="ui-dropdown-select" disabled>My CalendarInvite <i class="ph-bold ph-caret-down"></i></button>
-            <div class="ui-filter-search">
-              <i class="ph-bold ph-magnifying-glass"></i>
-              <input type="text" placeholder="Search meetings" disabled>
+            <span class="filter-date-label">${escapeHtml(dateDisplay)}</span>
+            <div class="filter-divider"></div>
+            <div class="filter-tabs">
+              <a href="/admin/bookings?filter=today" class="filter-tab${activeFilter === 'today' ? ' active' : ''}"><i class="ph-bold ph-check"></i> Today</a>
+              <a href="/admin/bookings?filter=upcoming" class="filter-tab${activeFilter === 'upcoming' ? ' active' : ''}">Upcoming</a>
+              <a href="/admin/bookings?filter=this_week" class="filter-tab${activeFilter === 'this_week' ? ' active' : ''}">This week</a>
+              <a href="/admin/bookings?filter=last_week" class="filter-tab${activeFilter === 'last_week' ? ' active' : ''}">Last week</a>
             </div>
           </div>
           <div class="meetings-filter-right">
-            <button class="ui-filter-btn" disabled><i class="ph-bold ph-faders"></i> Filter <i class="ph-bold ph-caret-down"></i></button>
+            <span class="filter-count">Displaying ${meetingCount} meeting${meetingCount !== 1 ? 's' : ''}</span>
           </div>
         </div>
 
@@ -589,14 +617,23 @@ function buildApp(opts = {}) {
           <a href="/admin/calendars" role="button" class="secondary">Back to Calendars</a>
         `));
       }
-      const url = buildGoogleAuthUrl(googleClientId, googleRedirectUri);
+      const state = crypto.randomBytes(16).toString('hex');
+      request.session.set('googleOauthState', state);
+      const url = buildGoogleAuthUrl(googleClientId, googleRedirectUri, state);
       return reply.redirect(url);
     });
 
     app.get('/calendars/callback/google', async (request, reply) => {
-      const { code, error } = request.query;
+      const { code, error, state } = request.query;
       if (!code || error) {
         return reply.redirect('/admin/calendars?error=oauth_denied');
+      }
+      const expectedState = request.session.get('googleOauthState');
+      if (expectedState) {
+        if (!state || state !== expectedState) {
+          return reply.redirect('/admin/calendars?error=oauth_failed');
+        }
+        request.session.set('googleOauthState', null);
       }
       try {
         const tokens = await exchangeCodeForTokens(code, googleClientId, googleClientSecret, googleRedirectUri);
@@ -606,9 +643,27 @@ function buildApp(opts = {}) {
         const encryptedAccess = encrypt(tokens.access_token, encryptionKey);
         const encryptedRefresh = tokens.refresh_token ? encrypt(tokens.refresh_token, encryptionKey) : null;
 
-        app.db.prepare(
-          'INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?)'
-        ).run('google', encryptedAccess, encryptedRefresh || '', tokenExpiry, email, 'connected');
+        const existing = app.db.prepare(
+          'SELECT id FROM calendar_connections WHERE provider = ? AND email = ?'
+        ).get('google', email);
+
+        if (existing) {
+          app.db.prepare(
+            'UPDATE calendar_connections SET encrypted_access_token = ?, encrypted_refresh_token = ?, token_expiry = ?, status = ? WHERE id = ?'
+          ).run(encryptedAccess, encryptedRefresh || '', tokenExpiry, 'connected', existing.id);
+        } else {
+          app.db.prepare(
+            'INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?)'
+          ).run('google', encryptedAccess, encryptedRefresh || '', tokenExpiry, email, 'connected');
+        }
+
+        // Restore session if lost during OAuth redirect
+        if (!request.session.get('adminId')) {
+          const admin = app.db.prepare('SELECT id FROM admin LIMIT 1').get();
+          if (admin) {
+            request.session.set('adminId', admin.id);
+          }
+        }
 
         return reply.redirect('/admin/calendars');
       } catch (err) {
@@ -683,17 +738,42 @@ function buildApp(opts = {}) {
 
       const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
 
-      app.db.prepare(`
-        INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(
-        'microsoft',
-        encrypt(tokenData.access_token, encryptionKey),
-        encrypt(tokenData.refresh_token, encryptionKey),
-        expiresAt,
-        meData.mail || meData.userPrincipalName,
-        'connected'
-      );
+      const msEmail = meData.mail || meData.userPrincipalName;
+      const msExisting = app.db.prepare(
+        'SELECT id FROM calendar_connections WHERE provider = ? AND email = ?'
+      ).get('microsoft', msEmail);
+
+      if (msExisting) {
+        app.db.prepare(
+          'UPDATE calendar_connections SET encrypted_access_token = ?, encrypted_refresh_token = ?, token_expiry = ?, status = ? WHERE id = ?'
+        ).run(
+          encrypt(tokenData.access_token, encryptionKey),
+          encrypt(tokenData.refresh_token, encryptionKey),
+          expiresAt,
+          'connected',
+          msExisting.id
+        );
+      } else {
+        app.db.prepare(`
+          INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(
+          'microsoft',
+          encrypt(tokenData.access_token, encryptionKey),
+          encrypt(tokenData.refresh_token, encryptionKey),
+          expiresAt,
+          msEmail,
+          'connected'
+        );
+      }
+
+      // Restore session if lost during OAuth redirect
+      if (!request.session.get('adminId')) {
+        const admin = app.db.prepare('SELECT id FROM admin LIMIT 1').get();
+        if (admin) {
+          request.session.set('adminId', admin.id);
+        }
+      }
 
       return reply.redirect('/admin/calendars');
     });
@@ -753,9 +833,27 @@ function buildApp(opts = {}) {
       const encryptedAccess = encrypt(tokenData.access_token, encryptionKey);
       const encryptedRefresh = encrypt(tokenData.refresh_token, encryptionKey);
 
-      app.db.prepare(
-        'INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run('zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected');
+      const zohoExisting = app.db.prepare(
+        'SELECT id FROM calendar_connections WHERE provider = ? AND email = ?'
+      ).get('zoho', email);
+
+      if (zohoExisting) {
+        app.db.prepare(
+          'UPDATE calendar_connections SET encrypted_access_token = ?, encrypted_refresh_token = ?, token_expiry = ?, status = ? WHERE id = ?'
+        ).run(encryptedAccess, encryptedRefresh, expiresAt, 'connected', zohoExisting.id);
+      } else {
+        app.db.prepare(
+          'INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run('zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected');
+      }
+
+      // Restore session if lost during OAuth redirect
+      if (!request.session.get('adminId')) {
+        const admin = app.db.prepare('SELECT id FROM admin LIMIT 1').get();
+        if (admin) {
+          request.session.set('adminId', admin.id);
+        }
+      }
 
       return reply.redirect('/admin/calendars');
     });

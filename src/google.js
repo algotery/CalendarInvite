@@ -12,7 +12,7 @@ const SCOPES = [
   'email',
 ];
 
-function buildGoogleAuthUrl(clientId, redirectUri) {
+function buildGoogleAuthUrl(clientId, redirectUri, state) {
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -20,7 +20,7 @@ function buildGoogleAuthUrl(clientId, redirectUri) {
     scope: SCOPES.join(' '),
     access_type: 'offline',
     prompt: 'consent',
-    state: 'google',
+    state: state || 'google',
   });
   return `${GOOGLE_AUTH_URL}?${params.toString()}`;
 }

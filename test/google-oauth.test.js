@@ -110,6 +110,16 @@ describe('Google OAuth2 Calendar Connection', () => {
 
   describe('GET /admin/calendars/callback/google', () => {
     it('exchanges code for tokens, encrypts and stores them', async () => {
+      // First call connect to set state in session
+      const connectResponse = await app.inject({
+        method: 'GET',
+        url: '/admin/calendars/connect/google',
+        headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
+      });
+      const stateMatch = connectResponse.headers.location.match(/state=([^&]+)/);
+      const oauthState = stateMatch[1];
+      const connectCookies = connectResponse.headers['set-cookie'] || sessionCookies;
+
       // Mock the Google token exchange and userinfo
       const originalFetch = global.fetch;
       global.fetch = mock.fn(async (url, opts) => {
@@ -136,8 +146,8 @@ describe('Google OAuth2 Calendar Connection', () => {
       try {
         const response = await app.inject({
           method: 'GET',
-          url: '/admin/calendars/callback/google?code=test-auth-code&state=google',
-          headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
+          url: `/admin/calendars/callback/google?code=test-auth-code&state=${oauthState}`,
+          headers: { cookie: Array.isArray(connectCookies) ? connectCookies.join('; ') : connectCookies },
         });
 
         assert.equal(response.statusCode, 302);
@@ -157,6 +167,16 @@ describe('Google OAuth2 Calendar Connection', () => {
     });
 
     it('redirects to calendars page with error on failed token exchange', async () => {
+      // First call connect to set state in session
+      const connectResponse = await app.inject({
+        method: 'GET',
+        url: '/admin/calendars/connect/google',
+        headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
+      });
+      const stateMatch = connectResponse.headers.location.match(/state=([^&]+)/);
+      const oauthState = stateMatch[1];
+      const connectCookies = connectResponse.headers['set-cookie'] || sessionCookies;
+
       const originalFetch = global.fetch;
       global.fetch = mock.fn(async () => ({
         ok: false,
@@ -167,8 +187,8 @@ describe('Google OAuth2 Calendar Connection', () => {
       try {
         const response = await app.inject({
           method: 'GET',
-          url: '/admin/calendars/callback/google?code=bad-code&state=google',
-          headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
+          url: `/admin/calendars/callback/google?code=bad-code&state=${oauthState}`,
+          headers: { cookie: Array.isArray(connectCookies) ? connectCookies.join('; ') : connectCookies },
         });
         assert.equal(response.statusCode, 302);
         assert.ok(response.headers.location.includes('/admin/calendars'));
