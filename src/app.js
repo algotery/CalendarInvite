@@ -299,7 +299,8 @@ function buildApp(opts = {}) {
       const adminTz = admin ? admin.timezone : 'UTC';
 
       const { status, profile_id, filter } = request.query;
-      const activeFilter = filter || 'upcoming';
+      const activeFilter = filter || 'today';
+      const hasExplicitFilter = !!filter;
 
       const now = new Date();
       let timeMin = null, timeMax = null;
@@ -312,6 +313,9 @@ function buildApp(opts = {}) {
         timeMin = todayStart.toISOString();
         timeMax = todayEnd.toISOString();
       } else if (activeFilter === 'upcoming') {
+        timeMin = now.toISOString();
+        timeMax = null;
+      } else if (activeFilter === 'all') {
         timeMin = null;
         timeMax = null;
       } else if (activeFilter === 'this_week') {
@@ -441,9 +445,10 @@ function buildApp(opts = {}) {
             <div class="filter-divider"></div>
             <div class="filter-tabs">
               <a href="/admin/bookings?filter=today" class="filter-tab${activeFilter === 'today' ? ' active' : ''}"><i class="ph-bold ph-check"></i> Today</a>
-              <a href="/admin/bookings?filter=upcoming" class="filter-tab${activeFilter === 'upcoming' ? ' active' : ''}">Upcoming</a>
-              <a href="/admin/bookings?filter=this_week" class="filter-tab${activeFilter === 'this_week' ? ' active' : ''}">This week</a>
-              <a href="/admin/bookings?filter=last_week" class="filter-tab${activeFilter === 'last_week' ? ' active' : ''}">Last week</a>
+              <a href="/admin/bookings?filter=upcoming" class="filter-tab${activeFilter === 'upcoming' ? ' active' : ''}"><i class="ph-bold ph-check"></i> Upcoming</a>
+              <a href="/admin/bookings?filter=this_week" class="filter-tab${activeFilter === 'this_week' ? ' active' : ''}"><i class="ph-bold ph-check"></i> This week</a>
+              <a href="/admin/bookings?filter=last_week" class="filter-tab${activeFilter === 'last_week' ? ' active' : ''}"><i class="ph-bold ph-check"></i> Last week</a>
+              <a href="/admin/bookings?filter=all" class="filter-tab${activeFilter === 'all' ? ' active' : ''}"><i class="ph-bold ph-check"></i> All</a>
             </div>
           </div>
           <div class="meetings-filter-right">
