@@ -286,7 +286,12 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               <div class="booking-profile-meta">
                 <div class="booking-profile-meta-item">
                   <i class="ph-fill ph-clock"></i>
-                  <span>30 min</span>
+                  <span id="duration-display">30 min</span>
+                  <div class="duration-toggle">
+                    <button type="button" class="duration-btn active" data-duration="30">30 min</button>
+                    <button type="button" class="duration-btn" data-duration="45">45 min</button>
+                    <button type="button" class="duration-btn" data-duration="60">60 min</button>
+                  </div>
                 </div>
                 <div class="booking-profile-meta-item">
                   <i class="ph-fill ${meetingIcon}"></i>
@@ -375,7 +380,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
         (function() {
           const slug = '${escapeHtml(slug)}';
           const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          const selectedDuration = 30; // Fixed 30 min duration
+          var selectedDuration = 30;
           let selectedSlotStart = null;
           let selectedDateStr = null;
 
@@ -397,6 +402,56 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
 
           function hideBackButton() {
             document.getElementById('back-btn').style.display = 'none';
+          }
+
+          // Duration toggle
+          document.querySelectorAll('.duration-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+              document.querySelectorAll('.duration-btn').forEach(function(b) { b.classList.remove('active'); });
+              btn.classList.add('active');
+              selectedDuration = parseInt(btn.dataset.duration);
+              document.getElementById('duration-display').textContent = selectedDuration + ' min';
+              if (selectedDateStr) {
+                loadSlots(selectedDateStr);
+              }
+            });
+          });
+
+          function loadSlots(dateStr) {
+            var container = document.getElementById('time-slots');
+            container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-spinner booking-slots-empty-icon loading" style="opacity: 1;"></i><div class="booking-slots-empty-description">Loading available times...</div></div>';
+            document.getElementById('slots-section').style.display = 'block';
+
+            fetch('/api/book/' + slug + '/slots?date=' + dateStr + '&duration=' + selectedDuration + '&timezone=' + tz)
+              .then(function(res) { return res.json(); })
+              .then(function(data) {
+                if (!data.slots.length) {
+                  container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-calendar-x booking-slots-empty-icon"></i><div class="booking-slots-empty-title">No Available Times</div><div class="booking-slots-empty-description">Please select another date to see available time slots.</div></div>';
+                  return;
+                }
+                var renderedSlots = data.slots.map(function(s) {
+                  var t = new Date(s.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz });
+                  return '<button class="booking-slot-btn" data-start="' + s.start + '" data-time="' + t + '">' + t + '</button>';
+                });
+                container.innerHTML = renderedSlots.join('');
+                container.querySelectorAll('.booking-slot-btn').forEach(function(slotBtn) {
+                  slotBtn.addEventListener('click', function() {
+                    selectedSlotStart = slotBtn.dataset.start;
+                    var d2 = new Date(selectedDateStr + 'T00:00:00Z');
+                    var dateDisplay2 = d2.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+                    updateSelectedInfo(dateDisplay2, slotBtn.dataset.time);
+                    document.getElementById('calendar-step').style.display = 'none';
+                    document.getElementById('form-step').style.display = 'block';
+                    document.getElementById('booking-error').style.display = 'none';
+                    updateStepIndicator(3);
+                    var dt = document.querySelector('.duration-toggle');
+                    if (dt) dt.style.display = 'none';
+                  });
+                });
+              })
+              .catch(function() {
+                container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-wifi-x booking-slots-empty-icon" style="color: #dc2626;"></i><div class="booking-slots-empty-title" style="color: #dc2626;">Connection Error</div><div class="booking-slots-empty-description">Failed to load times. Please try again.</div></div>';
+              });
           }
 
           function updateSelectedInfo(dateStr, timeStr) {
@@ -424,6 +479,8 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               document.getElementById('slots-section').style.display = 'block';
               updateStepIndicator(2);
               updateSelectedInfo(selectedDateStr, null);
+              var dt = document.querySelector('.duration-toggle');
+              if (dt) dt.style.display = '';
             } else if (slotsVisible) {
               // From slots back to calendar
               document.getElementById('slots-section').style.display = 'none';
@@ -510,7 +567,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
                   btn.className += ' calendar-day-today';
                 }
                 (function(ds) {
-                  btn.addEventListener('click', function() { loadSlots(ds); });
+                  btn.addEventListener('click', function() { selectDate(ds); });
                 })(dateStr);
               }
 
@@ -520,7 +577,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
 
           var selectedDate = null;
 
-          function loadSlots(dateStr) {
+          function selectDate(dateStr) {
             selectedDateStr = dateStr;
 
             // Mark selected date in calendar
@@ -543,8 +600,6 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               }
             });
 
-            // Show slots section
-            document.getElementById('slots-section').style.display = 'block';
             showBackButton();
             updateStepIndicator(2);
 
@@ -553,42 +608,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
             document.getElementById('selected-date-header').textContent = dateDisplay;
             updateSelectedInfo(dateDisplay, null);
 
-            var container = document.getElementById('time-slots');
-            container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-spinner booking-slots-empty-icon loading" style="opacity: 1;"></i><div class="booking-slots-empty-description">Loading available times...</div></div>';
-
-            fetch('/api/book/' + slug + '/slots?date=' + dateStr + '&duration=' + selectedDuration + '&timezone=' + tz)
-              .then(function(res) { return res.json(); })
-              .then(function(data) {
-                if (!data.slots.length) {
-                  container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-calendar-x booking-slots-empty-icon"></i><div class="booking-slots-empty-title">No Available Times</div><div class="booking-slots-empty-description">Please select another date to see available time slots.</div></div>';
-                  return;
-                }
-
-                var renderedSlots = data.slots.map(function(s, idx) {
-                  var t = new Date(s.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz });
-                  return '<button class="booking-slot-btn" data-start="' + s.start + '" data-time="' + t + '">' + t + '</button>';
-                });
-
-                container.innerHTML = renderedSlots.join('');
-                container.querySelectorAll('.booking-slot-btn').forEach(function(btn) {
-                  btn.addEventListener('click', function() {
-                    selectedSlotStart = btn.dataset.start;
-                    var selectedTime = btn.dataset.time;
-
-                    // Update selected info
-                    updateSelectedInfo(dateDisplay, selectedTime);
-
-                    // Show form
-                    document.getElementById('calendar-step').style.display = 'none';
-                    document.getElementById('form-step').style.display = 'block';
-                    document.getElementById('booking-error').style.display = 'none';
-                    updateStepIndicator(3);
-                  });
-                });
-              })
-              .catch(function(err) {
-                container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-wifi-x booking-slots-empty-icon" style="color: #dc2626;"></i><div class="booking-slots-empty-title" style="color: #dc2626;">Connection Error</div><div class="booking-slots-empty-description">Failed to load times. Please try again.</div></div>';
-              });
+            loadSlots(dateStr);
           }
 
           function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
