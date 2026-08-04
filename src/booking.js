@@ -257,85 +257,122 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
       `));
     }
 
+    const meetingTool = profile.meeting_tool === 'meet' ? 'Google Meet' : profile.meeting_tool === 'teams' ? 'Microsoft Teams' : 'Phone call';
+    const meetingIcon = profile.meeting_tool === 'meet' ? 'ph-video-camera' : profile.meeting_tool === 'teams' ? 'ph-video-camera' : 'ph-phone';
+
     reply.type('text/html').send(baseLayout(`Book - ${escapeHtml(profile.name)}`, `
-      <div style="max-width: 900px; margin: 2rem auto;">
-        <div style="text-align: center; margin-bottom: 3rem;">
-          <h1 style="margin-bottom: 0.5rem;">${escapeHtml(profile.name)}</h1>
-          <p style="color: var(--text-secondary);">Select a time that works for you</p>
+      <div class="booking-page-container">
+        <!-- Step Indicator -->
+        <div class="step-indicator" id="step-indicator">
+          <div class="step-item active" data-step="1"><div class="step-number">1</div><div class="step-label">Date</div></div>
+          <div class="step-line"></div>
+          <div class="step-item" data-step="2"><div class="step-number">2</div><div class="step-label">Time</div></div>
+          <div class="step-line"></div>
+          <div class="step-item" data-step="3"><div class="step-number">3</div><div class="step-label">Details</div></div>
         </div>
-        <div id="booking-widget">
-          <div class="step-indicator" id="step-indicator">
-            <div class="step-item active" data-step="1"><div class="step-number">1</div><div class="step-label">Duration</div></div>
-            <div class="step-line"></div>
-            <div class="step-item" data-step="2"><div class="step-number">2</div><div class="step-label">Date</div></div>
-            <div class="step-line"></div>
-            <div class="step-item" data-step="3"><div class="step-number">3</div><div class="step-label">Time</div></div>
-            <div class="step-line"></div>
-            <div class="step-item" data-step="4"><div class="step-number">4</div><div class="step-label">Details</div></div>
-          </div>
-          <section id="duration-step">
-            <h2>Duration</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1.5rem; text-align: center;">How long should the meeting be?</p>
-            <div role="group">
-              <button class="duration-btn" data-duration="30">30 min</button>
-              <button class="duration-btn" data-duration="45">45 min</button>
-              <button class="duration-btn" data-duration="60">60 min</button>
+
+        <!-- Two Column Layout -->
+        <div class="booking-layout">
+          <!-- Left Panel -->
+          <div class="booking-left-panel">
+            <button type="button" class="booking-back-btn" id="back-btn" style="display:none;">
+              <i class="ph-bold ph-arrow-left"></i> Back
+            </button>
+
+            <div class="booking-profile-info">
+              <div class="booking-profile-name">${escapeHtml(profile.name)}</div>
+              <h1 class="booking-profile-title">${escapeHtml(profile.name)}</h1>
+
+              <div class="booking-profile-meta">
+                <div class="booking-profile-meta-item">
+                  <i class="ph-fill ph-clock"></i>
+                  <span>30 min</span>
+                </div>
+                <div class="booking-profile-meta-item">
+                  <i class="ph-fill ${meetingIcon}"></i>
+                  <span>${meetingTool}</span>
+                </div>
+              </div>
+
+              <div id="selected-info" class="booking-profile-selected" style="display:none;">
+                <!-- Selected date/time will be shown here -->
+              </div>
             </div>
-          </section>
-          <section id="calendar-step" style="display:none">
-            <button type="button" class="back-btn" id="back-to-duration">← Back to Duration</button>
-            <h2>Select a Date</h2>
-            <div id="calendar-header"></div>
-            <div id="calendar-grid"></div>
-          </section>
-          <section id="slots-step" style="display:none">
-            <button type="button" class="back-btn" id="back-to-calendar">← Back to Calendar</button>
-            <h2>Available Times</h2>
-            <p id="selected-date-title" style="color: var(--text-secondary); margin-bottom: 1.5rem; font-weight: 500; text-align: center;"></p>
-            <div id="time-slots"></div>
-          </section>
-          <section id="form-step" style="display:none">
-            <button type="button" class="back-btn" id="back-to-slots">← Back to Times</button>
-            <h2>Your Information</h2>
-            <div id="booking-error" style="display:none"></div>
-            <form id="booking-form">
-              <label>
-                Name
-                <input type="text" name="name" placeholder="Your full name" required>
-              </label>
-              <label>
-                Email
-                <input type="email" name="email" placeholder="your.email@example.com" required>
-              </label>
-              <label>
-                Additional Attendees
-                <input type="text" name="additional_attendees" placeholder="colleague@example.com, other@example.com">
-                <small style="color: var(--text-secondary);">Separate multiple emails with commas</small>
-              </label>
-              <label>
-                Meeting Title
-                <input type="text" name="title" placeholder="Meeting with ${escapeHtml(profile.name)}">
-              </label>
-              <label>
-                Description (optional)
-                <textarea name="description" placeholder="Add any notes or agenda items..." rows="4"></textarea>
-              </label>
-              <button type="submit" style="width: 100%;">Confirm Booking →</button>
-            </form>
-          </section>
-          <section id="confirmation-step" style="display:none">
-            <div style="margin-bottom: 0.5rem;"><i class="ph-duotone ph-check-circle" style="font-size: 4rem; color: var(--success); display: block; margin: 0 auto 0.5rem auto;"></i></div>
-            <h2 style="color: var(--success); text-align: center;">Booking Confirmed</h2>
-            <div id="confirmation-details"></div>
-          </section>
+          </div>
+
+          <!-- Right Panel -->
+          <div class="booking-right-panel">
+            <!-- Calendar Step -->
+            <div id="calendar-step">
+              <div class="booking-content-header">
+                <h2 class="booking-content-title">Select a Date & Time</h2>
+              </div>
+
+              <div class="booking-calendar-container">
+                <div class="booking-calendar-section">
+                  <div id="calendar-header"></div>
+                  <div id="calendar-grid"></div>
+                </div>
+
+                <div class="booking-slots-section" id="slots-section" style="display:none;">
+                  <div class="booking-slots-header" id="selected-date-header"></div>
+                  <div class="booking-slots-list" id="time-slots"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Form Step -->
+            <div id="form-step" style="display:none;">
+              <div class="booking-content-header">
+                <h2 class="booking-content-title">Enter Details</h2>
+              </div>
+
+              <div id="booking-error" style="display:none"></div>
+
+              <form id="booking-form">
+                <label>
+                  Name *
+                  <input type="text" name="name" placeholder="Your full name" required>
+                </label>
+                <label>
+                  Email *
+                  <input type="email" name="email" placeholder="your.email@example.com" required>
+                </label>
+                <label>
+                  Additional Attendees
+                  <input type="text" name="additional_attendees" placeholder="colleague@example.com, other@example.com">
+                  <small style="color: var(--text-secondary);">Separate multiple emails with commas</small>
+                </label>
+                <label>
+                  Meeting Title
+                  <input type="text" name="title" placeholder="Meeting with ${escapeHtml(profile.name)}">
+                </label>
+                <label>
+                  Description (optional)
+                  <textarea name="description" placeholder="Add any notes or agenda items..." rows="4"></textarea>
+                </label>
+                <button type="submit" style="width: 100%; margin-top: 16px;">Schedule Event</button>
+              </form>
+            </div>
+
+            <!-- Confirmation Step -->
+            <div id="confirmation-step" style="display:none;">
+              <div style="text-align: center; padding: 48px 24px;">
+                <i class="ph-fill ph-check-circle" style="font-size: 4rem; color: var(--success); margin-bottom: 16px;"></i>
+                <h2 style="color: var(--success); margin-bottom: 24px;">Booking Confirmed!</h2>
+                <div id="confirmation-details"></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <script>
         (function() {
           const slug = '${escapeHtml(slug)}';
           const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          let selectedDuration = null;
+          const selectedDuration = 30; // Fixed 30 min duration
           let selectedSlotStart = null;
+          let selectedDateStr = null;
 
           function updateStepIndicator(activeStep) {
             document.querySelectorAll('.step-item').forEach(function(item) {
@@ -349,42 +386,47 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
             });
           }
 
-          document.querySelectorAll('.duration-btn').forEach(function(btn) {
-            btn.addEventListener('click', function() {
-              document.querySelectorAll('.duration-btn').forEach(function(b) {
-                b.classList.remove('contrast');
-                b.classList.add('outline');
-              });
-              btn.classList.remove('outline');
-              btn.classList.add('contrast');
-              selectedDuration = parseInt(btn.dataset.duration);
-              document.getElementById('calendar-step').style.display = '';
-              document.getElementById('slots-step').style.display = 'none';
+          function showBackButton() {
+            document.getElementById('back-btn').style.display = 'inline-flex';
+          }
+
+          function hideBackButton() {
+            document.getElementById('back-btn').style.display = 'none';
+          }
+
+          function updateSelectedInfo(dateStr, timeStr) {
+            const selectedInfo = document.getElementById('selected-info');
+            if (dateStr && timeStr) {
+              selectedInfo.innerHTML = '<div class="booking-profile-selected-item"><i class="ph-fill ph-calendar"></i><span>' + dateStr + '</span></div><div class="booking-profile-selected-item"><i class="ph-fill ph-clock"></i><span>' + timeStr + '</span></div>';
+              selectedInfo.style.display = 'block';
+            } else if (dateStr) {
+              selectedInfo.innerHTML = '<div class="booking-profile-selected-item"><i class="ph-fill ph-calendar"></i><span>' + dateStr + '</span></div>';
+              selectedInfo.style.display = 'block';
+            } else {
+              selectedInfo.style.display = 'none';
+            }
+          }
+
+          // Back button handler
+          document.getElementById('back-btn').addEventListener('click', function() {
+            const formVisible = document.getElementById('form-step').style.display !== 'none';
+            const slotsVisible = document.getElementById('slots-section').style.display !== 'none';
+
+            if (formVisible) {
+              // From form back to slots
               document.getElementById('form-step').style.display = 'none';
+              document.getElementById('calendar-step').style.display = 'block';
+              document.getElementById('slots-section').style.display = 'block';
               updateStepIndicator(2);
-              renderCalendar();
-            });
+              updateSelectedInfo(selectedDateStr, null);
+            } else if (slotsVisible) {
+              // From slots back to calendar
+              document.getElementById('slots-section').style.display = 'none';
+              hideBackButton();
+              updateStepIndicator(1);
+              updateSelectedInfo(null, null);
+            }
           });
-
-          // Back buttons
-          document.getElementById('back-to-duration').addEventListener('click', function() {
-            document.getElementById('calendar-step').style.display = 'none';
-            document.getElementById('slots-step').style.display = 'none';
-            document.getElementById('form-step').style.display = 'none';
-            updateStepIndicator(1);
-          });
-
-          document.getElementById('back-to-calendar').addEventListener('click', function() {
-            document.getElementById('slots-step').style.display = 'none';
-            document.getElementById('form-step').style.display = 'none';
-            updateStepIndicator(2);
-          });
-
-          document.getElementById('back-to-slots').addEventListener('click', function() {
-            document.getElementById('form-step').style.display = 'none';
-            updateStepIndicator(3);
-          });
-
           function formatDateToYYYYMMDD(date) {
             var year = date.getFullYear();
             var month = String(date.getMonth() + 1).padStart(2, '0');
@@ -398,6 +440,10 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
 
           var today = new Date();
           today.setHours(0,0,0,0);
+
+          // Start by rendering calendar
+          updateStepIndicator(1);
+          renderCalendar();
 
           function renderCalendar() {
             var grid = document.getElementById('calendar-grid');
@@ -470,52 +516,73 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
           var selectedDate = null;
 
           function loadSlots(dateStr) {
-            selectedDate = dateStr;
-            document.getElementById('slots-step').style.display = '';
-            document.getElementById('form-step').style.display = 'none';
-            updateStepIndicator(3);
+            selectedDateStr = dateStr;
+
+            // Mark selected date in calendar
+            document.querySelectorAll('.calendar-day').forEach(function(btn) {
+              btn.classList.remove('calendar-day-selected');
+            });
+
+            var targetDate = new Date(dateStr + 'T00:00:00Z');
+            var targetDay = targetDate.getUTCDate();
+            var targetMonth = targetDate.getUTCMonth();
+            var targetYear = targetDate.getUTCFullYear();
+
+            document.querySelectorAll('.calendar-day').forEach(function(btn) {
+              if (btn.disabled) return;
+              var btnDay = parseInt(btn.textContent.trim());
+              if (btnDay === targetDay &&
+                  currentMonth.getMonth() === targetMonth &&
+                  currentMonth.getFullYear() === targetYear) {
+                btn.classList.add('calendar-day-selected');
+              }
+            });
+
+            // Show slots section
+            document.getElementById('slots-section').style.display = 'block';
+            showBackButton();
+            updateStepIndicator(2);
 
             var d = new Date(dateStr + 'T00:00:00Z');
             var dateDisplay = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
-            document.getElementById('selected-date-title').textContent = dateDisplay;
+            document.getElementById('selected-date-header').textContent = dateDisplay;
+            updateSelectedInfo(dateDisplay, null);
 
             var container = document.getElementById('time-slots');
-            container.innerHTML = '<div class="empty-state-message"><p class="loading">Loading available times...</p></div>';
+            container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-spinner booking-slots-empty-icon loading" style="opacity: 1;"></i><div class="booking-slots-empty-description">Loading available times...</div></div>';
+
             fetch('/api/book/' + slug + '/slots?date=' + dateStr + '&duration=' + selectedDuration + '&timezone=' + tz)
               .then(function(res) { return res.json(); })
               .then(function(data) {
-                console.log('API Response:', data);
-                console.log('Timezone:', tz);
-                console.log('Total slots:', data.slots.length);
-
                 if (!data.slots.length) {
-                  container.innerHTML = '<div class="empty-state-message"><p class="empty-state-title">No Available Times</p><p class="empty-state-description">This date is fully booked. Please select another date from the calendar.</p></div>';
+                  container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-calendar-x booking-slots-empty-icon"></i><div class="booking-slots-empty-title">No Available Times</div><div class="booking-slots-empty-description">Please select another date to see available time slots.</div></div>';
                   return;
                 }
 
-                var renderedSlots = data.slots.map(function(s) {
-                  var t = new Date(s.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: tz });
-                  console.log('Slot:', s.start, '→ Rendered:', t);
-                  return '<button class="slot-btn outline" data-start="' + s.start + '">' + t + '</button>';
+                var renderedSlots = data.slots.map(function(s, idx) {
+                  var t = new Date(s.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz });
+                  return '<button class="booking-slot-btn" data-start="' + s.start + '" data-time="' + t + '">' + t + '</button>';
                 });
 
-                console.log('Rendered', renderedSlots.length, 'slot buttons');
                 container.innerHTML = renderedSlots.join('');
-                container.querySelectorAll('.slot-btn').forEach(function(btn) {
+                container.querySelectorAll('.booking-slot-btn').forEach(function(btn) {
                   btn.addEventListener('click', function() {
-                    document.querySelectorAll('.slot-btn').forEach(function(b) { b.classList.remove('contrast'); b.classList.add('outline'); });
-                    btn.classList.remove('outline');
-                    btn.classList.add('contrast');
                     selectedSlotStart = btn.dataset.start;
-                    document.getElementById('form-step').style.display = '';
+                    var selectedTime = btn.dataset.time;
+
+                    // Update selected info
+                    updateSelectedInfo(dateDisplay, selectedTime);
+
+                    // Show form
+                    document.getElementById('calendar-step').style.display = 'none';
+                    document.getElementById('form-step').style.display = 'block';
                     document.getElementById('booking-error').style.display = 'none';
-                    document.getElementById('form-step').scrollIntoView({ behavior: 'smooth' });
-                    updateStepIndicator(4);
+                    updateStepIndicator(3);
                   });
                 });
               })
               .catch(function(err) {
-                container.innerHTML = '<div class="empty-state-message error"><p class="empty-state-title">Connection Error</p><p class="empty-state-description">Failed to load available times. Please check your connection and try again.</p></div>';
+                container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-wifi-x booking-slots-empty-icon" style="color: #dc2626;"></i><div class="booking-slots-empty-title" style="color: #dc2626;">Connection Error</div><div class="booking-slots-empty-description">Failed to load times. Please try again.</div></div>';
               });
           }
 
@@ -555,24 +622,36 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               if (!result.ok) {
                 errDiv.textContent = result.data.error || 'Something went wrong. Please try again.';
                 errDiv.className = 'alert error';
-                errDiv.style.display = '';
-                submitBtn.textContent = 'Confirm Booking';
+                errDiv.style.display = 'block';
+                submitBtn.textContent = 'Schedule Event';
                 submitBtn.disabled = false;
+                errDiv.scrollIntoView({ behavior: 'smooth' });
                 return;
               }
+
               var b = result.data.booking;
-              document.getElementById('booking-widget').querySelectorAll('section').forEach(function(s) { s.style.display = 'none'; });
-              var conf = document.getElementById('confirmation-step');
-              conf.style.display = '';
-              conf.scrollIntoView({ behavior: 'smooth' });
+
+              // Hide form, show confirmation
+              document.getElementById('form-step').style.display = 'none';
+              document.getElementById('confirmation-step').style.display = 'block';
+              hideBackButton();
+              var stepIndicator = document.getElementById('step-indicator');
+              if (stepIndicator) stepIndicator.style.display = 'none';
+
               var startLocal = new Date(b.start_time).toLocaleString(undefined, { timeZone: tz, dateStyle: 'full', timeStyle: 'short' });
-              var endLocal = new Date(b.end_time).toLocaleTimeString(undefined, { timeZone: tz, hour: '2-digit', minute: '2-digit' });
-              var details = '<article><h3>' + esc(b.title) + '</h3>';
-              details += '<p><strong>When:</strong> ' + esc(startLocal) + ' - ' + esc(endLocal) + '</p>';
-              details += '<p><strong>Duration:</strong> ' + b.duration_minutes + ' minutes</p>';
-              if (b.meeting_link) details += '<p><strong>Meeting Link:</strong> <a href="' + esc(b.meeting_link) + '" target="_blank">' + esc(b.meeting_link) + '</a></p>';
-              details += '<p><strong>Attendees:</strong> ' + b.attendees.map(esc).join(', ') + '</p>';
-              details += '<p style="margin-top:2rem;color:var(--text-secondary);">A calendar invitation has been sent to all attendees.</p></article>';
+              var endLocal = new Date(b.end_time).toLocaleTimeString(undefined, { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+
+              var details = '<div style="background: #f5f5f5; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: left;">';
+              details += '<h3 style="margin-top: 0; font-size: 1.125rem;">' + esc(b.title) + '</h3>';
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-calendar" style="font-size: 1.25rem; color: #4a4a4a;"></i><span>' + esc(startLocal) + '</span></div>';
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-clock" style="font-size: 1.25rem; color: #4a4a4a;"></i><span>' + b.duration_minutes + ' minutes</span></div>';
+              if (b.meeting_link) {
+                details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-video-camera" style="font-size: 1.25rem; color: #4a4a4a;"></i><a href="' + esc(b.meeting_link) + '" target="_blank" style="color: var(--primary); font-weight: 500;">Join meeting</a></div>';
+              }
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-users" style="font-size: 1.25rem; color: #4a4a4a;"></i><span>' + b.attendees.map(esc).join(', ') + '</span></div>';
+              details += '</div>';
+              details += '<p style="color: #6b6b6b; font-size: 0.9375rem; text-align: center;">A calendar invitation has been sent to all attendees.</p>';
+
               document.getElementById('confirmation-details').innerHTML = details;
             })
             .catch(function(err) {
@@ -585,7 +664,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
           });
         })();
       </script>
-    `));
+    `, false, '', true));
   });
 }
 
