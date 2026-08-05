@@ -84,6 +84,12 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
 </head>
 <body${bodyClass}>
   ${content}
+  ${isAdmin ? `<div id="profile-overlay" class="profile-overlay" style="display:none">
+    <div class="profile-overlay-backdrop"></div>
+    <div class="profile-overlay-panel">
+      <div class="profile-overlay-content" id="profile-overlay-content"></div>
+    </div>
+  </div>` : ''}
   <div id="app-modal-overlay" class="app-modal-overlay" style="display:none">
     <div class="app-modal">
       <div class="app-modal-icon" id="app-modal-icon"></div>
@@ -171,6 +177,87 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
     document.getElementById('app-modal-overlay').addEventListener('click', function(e) {
       if (e.target === this) AppModal.hide();
     });
+
+    // Profile overlay (global — works from any page)
+    (function() {
+      var overlay = document.getElementById('profile-overlay');
+      if (!overlay) return;
+      var content = document.getElementById('profile-overlay-content');
+
+      function openOverlay(url) {
+        overlay.style.display = 'flex';
+        content.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:64px;"><i class="ph-bold ph-spinner loading" style="font-size:24px;opacity:0.5;"></i></div>';
+        document.body.style.overflow = 'hidden';
+        fetch(url)
+          .then(function(res) { return res.text(); })
+          .then(function(html) {
+            content.innerHTML = html;
+            content.querySelectorAll('script').forEach(function(oldScript) {
+              var newScript = document.createElement('script');
+              newScript.textContent = oldScript.textContent;
+              oldScript.parentNode.replaceChild(newScript, oldScript);
+            });
+            if (window.initTimePickers) window.initTimePickers();
+          });
+      }
+
+      function closeOverlay() {
+        overlay.style.display = 'none';
+        content.innerHTML = '';
+        document.body.style.overflow = '';
+      }
+
+      document.addEventListener('click', function(e) {
+        var trigger = e.target.closest('.profile-overlay-trigger');
+        if (trigger) {
+          e.preventDefault();
+          document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.style.display = 'none'; });
+          openOverlay(trigger.dataset.url || trigger.getAttribute('href') + '?partial=1');
+        }
+      });
+
+      overlay.querySelector('.profile-overlay-backdrop').addEventListener('click', closeOverlay);
+
+      document.addEventListener('click', function(e) {
+        if (e.target.closest('#profile-overlay') && e.target.closest('a[href="/admin/profiles"]')) {
+          e.preventDefault();
+          closeOverlay();
+        }
+      });
+
+      document.addEventListener('submit', function(e) {
+        var form = e.target;
+        if (!form.closest('#profile-overlay')) return;
+        if (form.id === 'delete-profile-form') return;
+        e.preventDefault();
+        var formData = new FormData(form);
+        fetch(form.action + (form.action.includes('?') ? '&' : '?') + 'partial=1', {
+          method: 'POST',
+          body: new URLSearchParams(formData),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          redirect: 'manual'
+        }).then(function(res) {
+          if (res.status === 0 || res.type === 'opaqueredirect' || res.status === 302 || res.status === 303) {
+            closeOverlay();
+            window.location.reload();
+          } else {
+            return res.text();
+          }
+        }).then(function(html) {
+          if (html) {
+            content.innerHTML = html;
+            content.querySelectorAll('script').forEach(function(oldScript) {
+              var newScript = document.createElement('script');
+              newScript.textContent = oldScript.textContent;
+              oldScript.parentNode.replaceChild(newScript, oldScript);
+            });
+            if (window.initTimePickers) window.initTimePickers();
+          }
+        });
+      });
+
+      window.ProfileOverlay = { open: openOverlay, close: closeOverlay };
+    })();
   </script>
 </body>
 </html>`;
@@ -377,7 +464,7 @@ function buildApp(opts = {}) {
             </div>
           `}
           <div class="dashboard-actions">
-            <a href="/admin/profiles/new" class="btn-primary"><i class="ph-bold ph-plus"></i> New Profile</a>
+            <a href="/admin/profiles/new" class="btn-primary profile-overlay-trigger" data-url="/admin/profiles/new?partial=1"><i class="ph-bold ph-plus"></i> New Profile</a>
             <a href="/admin/bookings" class="btn-secondary">View All Bookings</a>
             <form method="POST" action="/admin/logout" style="margin: 0; padding: 0; border: none; background: none; margin-left: auto;">
               <input type="hidden" name="_csrf" value="${token}">
