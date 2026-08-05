@@ -60,6 +60,13 @@ function initializeSchema(db) {
       end_time TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS default_schedule_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS schedule_overrides (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,

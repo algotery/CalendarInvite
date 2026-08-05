@@ -11,7 +11,7 @@ const { createDatabase } = require('./db');
 const { buildGoogleAuthUrl, exchangeCodeForTokens, getGoogleUserEmail } = require('./google');
 const { encrypt, decrypt } = require('./encryption');
 const { registerProfileRoutes } = require('./profiles');
-const { registerBookingRoutes, registerSlotsApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook } = require('./booking');
+const { registerBookingRoutes, registerSlotsApi, registerBusynessApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook } = require('./booking');
 const { addPerformanceIndexes, getBatchedBookings } = require('./performance-fixes');
 
 
@@ -43,7 +43,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
       CalendarInvite
     </div>
     <div class="sidebar-create">
-      <a href="/admin/profiles/new"><i class="ph ph-plus"></i> Create</a>
+      <a href="/admin/profiles/new" class="profile-overlay-trigger" data-url="/admin/profiles/new?partial=1"><i class="ph ph-plus"></i> Create</a>
     </div>
     <nav class="sidebar-nav">
       <a href="/admin/dashboard" class="${activeNav === 'dashboard' ? 'nav-active' : ''}"><i class="ph-fill ph-squares-four"></i> Dashboard</a>
@@ -84,6 +84,14 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
 </head>
 <body${bodyClass}>
   ${content}
+  <div id="app-modal-overlay" class="app-modal-overlay" style="display:none">
+    <div class="app-modal">
+      <div class="app-modal-icon" id="app-modal-icon"></div>
+      <div class="app-modal-title" id="app-modal-title"></div>
+      <div class="app-modal-message" id="app-modal-message"></div>
+      <div class="app-modal-actions" id="app-modal-actions"></div>
+    </div>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
   <script>
     document.addEventListener('DOMContentLoaded', () => {
@@ -100,6 +108,68 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
         };
         window.initTimePickers();
       }
+    });
+
+    window.AppModal = {
+      show: function(opts) {
+        var overlay = document.getElementById('app-modal-overlay');
+        var icon = document.getElementById('app-modal-icon');
+        var title = document.getElementById('app-modal-title');
+        var message = document.getElementById('app-modal-message');
+        var actions = document.getElementById('app-modal-actions');
+
+        icon.innerHTML = opts.icon || '<i class="ph-fill ph-warning" style="font-size:32px;color:var(--warning)"></i>';
+        title.textContent = opts.title || '';
+        message.textContent = opts.message || '';
+        actions.innerHTML = '';
+
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'app-modal-btn app-modal-btn-cancel';
+        cancelBtn.textContent = opts.cancelText || 'Cancel';
+        cancelBtn.onclick = function() { AppModal.hide(); if (opts.onCancel) opts.onCancel(); };
+        actions.appendChild(cancelBtn);
+
+        if (opts.onConfirm) {
+          var confirmBtn = document.createElement('button');
+          confirmBtn.className = 'app-modal-btn app-modal-btn-confirm' + (opts.danger ? ' danger' : '');
+          confirmBtn.textContent = opts.confirmText || 'Confirm';
+          confirmBtn.onclick = function() { AppModal.hide(); opts.onConfirm(); };
+          actions.appendChild(confirmBtn);
+        } else {
+          cancelBtn.textContent = opts.cancelText || 'OK';
+        }
+
+        overlay.style.display = 'flex';
+        (opts.onConfirm ? actions.querySelector('.app-modal-btn-confirm') : cancelBtn).focus();
+      },
+      hide: function() {
+        document.getElementById('app-modal-overlay').style.display = 'none';
+      },
+      confirm: function(message, callback, opts) {
+        opts = opts || {};
+        AppModal.show({
+          icon: opts.icon || '<i class="ph-fill ph-warning" style="font-size:32px;color:var(--warning)"></i>',
+          title: opts.title || 'Confirm',
+          message: message,
+          confirmText: opts.confirmText || 'Confirm',
+          cancelText: opts.cancelText || 'Cancel',
+          danger: opts.danger || false,
+          onConfirm: callback
+        });
+      },
+      alert: function(message, opts) {
+        opts = opts || {};
+        AppModal.show({
+          icon: opts.icon || '<i class="ph-fill ph-info" style="font-size:32px;color:var(--primary)"></i>',
+          title: opts.title || 'Notice',
+          message: message,
+          cancelText: 'OK'
+        });
+      }
+    };
+
+    document.getElementById('app-modal-overlay').addEventListener('click', function(e) {
+      if (e.target === this) AppModal.hide();
     });
   </script>
 </body>
@@ -420,7 +490,7 @@ function buildApp(opts = {}) {
             const endTimeStr = formatterTime.format(end);
 
             const cancelBtn = b.status === 'confirmed'
-              ? `<form method="POST" action="/admin/bookings/${b.id}/cancel" style="display:inline; margin:0;" onsubmit="return confirm('Are you sure you want to cancel this meeting?');"><input type="hidden" name="_csrf" value="${token}"><button type="submit" class="icon-btn" title="Cancel Meeting"><i class="ph-bold ph-x"></i></button></form>`
+              ? `<form method="POST" action="/admin/bookings/${b.id}/cancel" style="display:inline; margin:0;" onsubmit="event.preventDefault(); var f=this; AppModal.confirm('Are you sure you want to cancel this meeting?', function(){f.submit()}, {title:'Cancel Meeting', confirmText:'Cancel Meeting', danger:true, icon:'<i class=\\'ph-fill ph-calendar-x\\' style=\\'font-size:32px;color:var(--error)\\'></i>'}); return false;"><input type="hidden" name="_csrf" value="${token}"><button type="submit" class="icon-btn" title="Cancel Meeting"><i class="ph-bold ph-x"></i></button></form>`
               : `<span class="badge error">Cancelled</span>`;
 
             rowsHtml += `
@@ -684,7 +754,7 @@ function buildApp(opts = {}) {
           </div>
           <div class="calendar-connection-actions">
             <span class="calendar-connection-status status-${c.status}">${escapeHtml(c.status)}</span>
-            <form method="POST" action="/admin/calendars/${c.id}/disconnect" style="display:inline">
+            <form method="POST" action="/admin/calendars/${c.id}/disconnect" style="display:inline" onsubmit="event.preventDefault(); var f=this; AppModal.confirm('Are you sure you want to disconnect this calendar?', function(){f.submit()}, {title:'Disconnect Calendar', confirmText:'Disconnect', danger:true, icon:'<i class=\\'ph-fill ph-plug\\' style=\\'font-size:32px;color:var(--error)\\'></i>'}); return false;">
               <input type="hidden" name="_csrf" value="${token}">
               <button type="submit" class="btn-disconnect"><i class="ph-bold ph-plug"></i> Disconnect</button>
             </form>
@@ -1028,39 +1098,57 @@ function buildApp(opts = {}) {
         `<option value="${tz}"${tz === admin.timezone ? ' selected' : ''}>${tz}</option>`
       ).join('');
 
-      reply.type('text/html').send(BASE_LAYOUT('Settings', `\n        <h1>Settings</h1>
-        ${flash ? `<div role="alert" class="success">${escapeHtml(flash)}</div>` : ''}
-        <div class="card">
-          <h2 style="display: flex; align-items: center; gap: 8px;"><i class="ph-duotone ph-globe-hemisphere-west"></i> Timezone</h2>
-          <p style="color:var(--text-secondary);font-size:0.875rem;margin-bottom:1rem;">Set your default timezone for displaying booking times.</p>
-          <form method="POST" action="/admin/settings/timezone">
-            <input type="hidden" name="_csrf" value="${token}">
-            <label>
-              Select your timezone
-              <select name="timezone">${timezoneOptions}</select>
-            </label>
-            <button type="submit">Save Timezone</button>
-          </form>
-        </div>
-        <div class="card">
-          <h2 style="display: flex; align-items: center; gap: 8px;"><i class="ph-duotone ph-lock-key"></i> Change Password</h2>
-          <p style="color:var(--text-secondary);font-size:0.875rem;margin-bottom:1rem;">Update your admin password. Make sure to use a strong password.</p>
-          <form method="POST" action="/admin/settings/password">
-            <input type="hidden" name="_csrf" value="${token}">
-            <label>
-              Current Password
-              <input type="password" name="current_password" placeholder="Enter current password" required>
-            </label>
-            <label>
-              New Password
-              <input type="password" name="new_password" placeholder="Enter new password" required>
-            </label>
-            <label>
-              Confirm New Password
-              <input type="password" name="confirm_password" placeholder="Confirm new password" required>
-            </label>
-            <button type="submit">Change Password</button>
-          </form>
+      reply.type('text/html').send(BASE_LAYOUT('Settings', `
+        <div class="settings-page">
+          <div class="settings-header">
+            <h1>Settings</h1>
+            <p class="settings-subtitle">Manage your account preferences</p>
+          </div>
+          ${flash ? `<div role="alert" class="success">${escapeHtml(flash)}</div>` : ''}
+          <div class="settings-content">
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div class="settings-card-icon"><i class="ph-duotone ph-globe-hemisphere-west"></i></div>
+                <div>
+                  <h2>Timezone</h2>
+                  <p>Set your default timezone for displaying booking times.</p>
+                </div>
+              </div>
+              <form method="POST" action="/admin/settings/timezone" class="settings-form">
+                <input type="hidden" name="_csrf" value="${token}">
+                <div class="field-group">
+                  <label class="field-label">Select your timezone</label>
+                  <select name="timezone" class="settings-select">${timezoneOptions}</select>
+                </div>
+                <button type="submit" class="settings-save-btn">Save Timezone</button>
+              </form>
+            </div>
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div class="settings-card-icon"><i class="ph-duotone ph-lock-key"></i></div>
+                <div>
+                  <h2>Change Password</h2>
+                  <p>Update your admin password. Make sure to use a strong password.</p>
+                </div>
+              </div>
+              <form method="POST" action="/admin/settings/password" class="settings-form">
+                <input type="hidden" name="_csrf" value="${token}">
+                <div class="field-group">
+                  <label class="field-label">Current Password</label>
+                  <input type="password" name="current_password" class="settings-input" placeholder="Enter current password" required>
+                </div>
+                <div class="field-group">
+                  <label class="field-label">New Password</label>
+                  <input type="password" name="new_password" class="settings-input" placeholder="Enter new password" required>
+                </div>
+                <div class="field-group">
+                  <label class="field-label">Confirm New Password</label>
+                  <input type="password" name="confirm_password" class="settings-input" placeholder="Confirm new password" required>
+                </div>
+                <button type="submit" class="settings-save-btn">Change Password</button>
+              </form>
+            </div>
+          </div>
         </div>
       `, true, 'settings'));
     });
@@ -1109,6 +1197,7 @@ function buildApp(opts = {}) {
   app.register(async function publicApi(app) {
     registerRateLimitHook(app);
     registerSlotsApi(app, { encryptionKey });
+    registerBusynessApi(app, { encryptionKey });
     registerBookingSubmitApi(app, { encryptionKey });
   }, { prefix: '/api/book' });
 

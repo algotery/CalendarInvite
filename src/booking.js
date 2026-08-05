@@ -30,7 +30,7 @@ async function getValidTokenForConnection(db, encryptionKey, connection) {
 
 const VALID_DURATIONS = [30, 45, 60];
 const LEAD_TIME_MS = 2 * 60 * 60 * 1000;
-const HORIZON_MS = 4 * 7 * 24 * 60 * 60 * 1000;
+const HORIZON_MS = 90 * 24 * 60 * 60 * 1000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const IP_RATE_LIMIT = 20;
@@ -115,6 +115,14 @@ function removeConflicts(slots, busyPeriods, bufferMs = 0) {
   });
 }
 
+const CALENDAR_API_TIMEOUT_MS = 8000;
+
+function fetchWithTimeout(fetchFn, url, options, timeoutMs = CALENDAR_API_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetchFn(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function getCalendarBusySlots(db, encryptionKey, profileId, dateStr, fetchFn) {
   const readCalendars = db.prepare(
     "SELECT cc.* FROM profile_read_calendars prc JOIN calendar_connections cc ON prc.calendar_connection_id = cc.id WHERE prc.profile_id = ? AND cc.status = 'connected'"
@@ -124,71 +132,73 @@ async function getCalendarBusySlots(db, encryptionKey, profileId, dateStr, fetch
 
   const timeMin = dateStr + 'T00:00:00Z';
   const timeMax = dateStr + 'T23:59:59Z';
-  const allBusy = [];
 
-  for (const cal of readCalendars) {
-    try {
-      const accessToken = await getValidTokenForConnection(db, encryptionKey, cal);
+  const results = await Promise.allSettled(readCalendars.map(async (cal) => {
+    const accessToken = await getValidTokenForConnection(db, encryptionKey, cal);
+    const busy = [];
 
-      if (cal.provider === 'google') {
-        const response = await fetchFn('https://www.googleapis.com/calendar/v3/freeBusy', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            timeMin,
-            timeMax,
-            items: [{ id: 'primary' }],
-          }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          const busy = data.calendars?.primary?.busy || [];
-          allBusy.push(...busy);
-        }
-      } else if (cal.provider === 'microsoft') {
-        const response = await fetchFn('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            schedules: [cal.email],
-            startTime: { dateTime: timeMin, timeZone: 'UTC' },
-            endTime: { dateTime: timeMax, timeZone: 'UTC' },
-          }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          const scheduleItems = data.value?.[0]?.scheduleItems || [];
-          allBusy.push(...scheduleItems.map(item => ({
-            start: item.start.dateTime,
-            end: item.end.dateTime,
-          })));
-        }
-      } else if (cal.provider === 'zoho') {
-        const params = new URLSearchParams({ stime: timeMin, etime: timeMax });
-        const response = await fetchFn(
-          `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`,
-          { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } }
-        );
-        if (response.ok) {
-          const data = await response.json();
-          const fbData = data.fb_data || [];
-          allBusy.push(...fbData.filter(s => s.fbtype === 'busy').map(s => ({
-            start: s.s_datetime,
-            end: s.e_datetime,
-          })));
-        }
+    if (cal.provider === 'google') {
+      const response = await fetchWithTimeout(fetchFn, 'https://www.googleapis.com/calendar/v3/freeBusy', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          timeMin,
+          timeMax,
+          items: [{ id: 'primary' }],
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        busy.push(...(data.calendars?.primary?.busy || []));
       }
-    } catch {
-      // Skip calendar errors gracefully
+    } else if (cal.provider === 'microsoft') {
+      const response = await fetchWithTimeout(fetchFn, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          schedules: [cal.email],
+          startTime: { dateTime: timeMin, timeZone: 'UTC' },
+          endTime: { dateTime: timeMax, timeZone: 'UTC' },
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const scheduleItems = data.value?.[0]?.scheduleItems || [];
+        busy.push(...scheduleItems.map(item => ({
+          start: item.start.dateTime,
+          end: item.end.dateTime,
+        })));
+      }
+    } else if (cal.provider === 'zoho') {
+      const params = new URLSearchParams({ stime: timeMin, etime: timeMax });
+      const response = await fetchWithTimeout(fetchFn, `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`, {
+        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const fbData = data.fb_data || [];
+        busy.push(...fbData.filter(s => s.fbtype === 'busy').map(s => ({
+          start: s.s_datetime,
+          end: s.e_datetime,
+        })));
+      }
+    }
+
+    return busy;
+  }));
+
+  const allBusy = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      allBusy.push(...result.value);
     }
   }
-
   return allBusy;
 }
 
@@ -317,6 +327,12 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
                 <div class="booking-calendar-section">
                   <div id="calendar-header"></div>
                   <div id="calendar-grid"></div>
+                  <div class="busyness-legend">
+                    <div class="busyness-legend-item"><div class="busyness-legend-dot dot-low"></div><span>Available</span></div>
+                    <div class="busyness-legend-item"><div class="busyness-legend-dot dot-medium"></div><span>Filling up</span></div>
+                    <div class="busyness-legend-item"><div class="busyness-legend-dot dot-high"></div><span>Almost full</span></div>
+                    <div class="busyness-legend-item"><div class="busyness-legend-dot dot-none"></div><span>Unavailable</span></div>
+                  </div>
                 </div>
 
                 <div class="booking-slots-section" id="slots-section" style="display:none;">
@@ -337,11 +353,11 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               <form id="booking-form">
                 <label>
                   Name *
-                  <input type="text" name="name" placeholder="Your full name" required>
+                  <input type="text" name="name" placeholder="Your Name" required>
                 </label>
                 <label>
                   Email *
-                  <input type="email" name="email" placeholder="your.email@example.com" required>
+                  <input type="email" name="email" placeholder="Your Email" required>
                 </label>
                 <div class="guests-section">
                   <button type="button" id="add-guests-btn" class="add-guests-btn" onclick="toggleGuestsInput()">
@@ -411,21 +427,30 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               btn.classList.add('active');
               selectedDuration = parseInt(btn.dataset.duration);
               document.getElementById('duration-display').textContent = selectedDuration + ' min';
+              busynessCache = {};
+              fetchBusyness(currentMonth.getFullYear(), currentMonth.getMonth());
               if (selectedDateStr) {
                 loadSlots(selectedDateStr);
               }
             });
           });
 
+          var slotsAbortController = null;
+
           function loadSlots(dateStr) {
+            if (slotsAbortController) slotsAbortController.abort();
+            slotsAbortController = new AbortController();
+            var signal = slotsAbortController.signal;
+
             var container = document.getElementById('time-slots');
             container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-spinner booking-slots-empty-icon loading" style="opacity: 1;"></i><div class="booking-slots-empty-description">Loading available times...</div></div>';
             document.getElementById('slots-section').style.display = 'block';
 
-            fetch('/api/book/' + slug + '/slots?date=' + dateStr + '&duration=' + selectedDuration + '&timezone=' + tz)
-              .then(function(res) { return res.json(); })
+            fetch('/api/book/' + slug + '/slots?date=' + dateStr + '&duration=' + selectedDuration + '&timezone=' + tz, { signal: signal })
+              .then(function(res) { if (!res.ok) throw new Error(res.status); return res.json(); })
               .then(function(data) {
-                if (!data.slots.length) {
+                if (signal.aborted) return;
+                if (!data.slots || !data.slots.length) {
                   container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-calendar-x booking-slots-empty-icon"></i><div class="booking-slots-empty-title">No Available Times</div><div class="booking-slots-empty-description">Please select another date to see available time slots.</div></div>';
                   return;
                 }
@@ -449,7 +474,8 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
                   });
                 });
               })
-              .catch(function() {
+              .catch(function(err) {
+                if (err && err.name === 'AbortError') return;
                 container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-wifi-x booking-slots-empty-icon" style="color: #dc2626;"></i><div class="booking-slots-empty-title" style="color: #dc2626;">Connection Error</div><div class="booking-slots-empty-description">Failed to load times. Please try again.</div></div>';
               });
           }
@@ -502,6 +528,38 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
 
           var today = new Date();
           today.setHours(0,0,0,0);
+
+          var busynessCache = {};
+
+          function fetchBusyness(year, month) {
+            var key = year + '-' + String(month + 1).padStart(2, '0');
+            if (busynessCache[key]) {
+              applyBusyness(busynessCache[key]);
+              return;
+            }
+            fetch('/api/book/' + slug + '/busyness?month=' + key + '&duration=' + selectedDuration)
+              .then(function(res) { if (!res.ok) throw new Error(res.status); return res.json(); })
+              .then(function(data) {
+                if (data.busyness) {
+                  busynessCache[key] = data.busyness;
+                  applyBusyness(data.busyness);
+                }
+              })
+              .catch(function() {});
+          }
+
+          function applyBusyness(busynessData) {
+            document.querySelectorAll('.calendar-day').forEach(function(btn) {
+              if (btn.disabled) return;
+              btn.classList.remove('busyness-low', 'busyness-medium', 'busyness-high', 'busyness-full');
+              var dayNum = parseInt(btn.textContent.trim());
+              var dateStr = formatDateToYYYYMMDD(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), dayNum));
+              var level = busynessData[dateStr];
+              if (level && level !== 'none') {
+                btn.classList.add('busyness-' + level);
+              }
+            });
+          }
 
           // Start by rendering calendar
           updateStepIndicator(1);
@@ -573,6 +631,8 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
 
               grid.appendChild(btn);
             }
+
+            fetchBusyness(currentMonth.getFullYear(), currentMonth.getMonth());
           }
 
           var selectedDate = null;
@@ -753,13 +813,149 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
 
 function registerRateLimitHook(app) {
   app.addHook('onRequest', async (request, reply) => {
-    // Optimized cleanup - only runs every 5 minutes instead of every request
+    // Only rate-limit POST requests (booking submissions), not read-only GETs
+    if (request.method !== 'POST') return;
     optimizedCleanupOldRateLimits(app.db);
     const ip = getClientIp(request);
     if (checkIpRateLimit(app.db, ip)) {
       return reply.code(429).send({ error: 'Too many requests, please try again later' });
     }
     recordIpRequest(app.db, ip, request.url);
+  });
+}
+
+function registerBusynessApi(app, { encryptionKey }) {
+  app.get('/:slug/busyness', async (request, reply) => {
+    const { slug } = request.params;
+    const { month, duration } = request.query;
+
+    if (!month) {
+      return reply.code(400).send({ error: 'month is required (YYYY-MM)' });
+    }
+
+    const durationMinutes = parseInt(duration, 10) || 30;
+    if (!VALID_DURATIONS.includes(durationMinutes)) {
+      return reply.code(400).send({ error: 'duration must be 30, 45, or 60' });
+    }
+
+    const profile = app.db.prepare("SELECT * FROM booking_profiles WHERE slug = ?").get(slug);
+    if (!profile) {
+      return reply.code(404).send({ error: 'profile not found' });
+    }
+
+    const [year, mon] = month.split('-').map(Number);
+    const daysInMonth = new Date(year, mon, 0).getDate();
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const horizonDate = new Date(now.getTime() + HORIZON_MS);
+    const bufferMs = (profile.buffer_time_minutes || 0) * 60 * 1000;
+
+    const activeDates = [];
+    const result = {};
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const dateObj = new Date(dateStr + 'T00:00:00Z');
+
+      if (dateObj < new Date(todayStr + 'T00:00:00Z') || dateObj > horizonDate) {
+        continue;
+      }
+
+      const totalSlots = computeSlots(app.db, profile.id, dateStr, durationMinutes, now);
+      if (totalSlots.length === 0) {
+        result[dateStr] = 'none';
+        continue;
+      }
+
+      const existingBookings = getExistingBookings(app.db, profile.id, dateStr);
+      let available = totalSlots;
+      if (existingBookings.length > 0) {
+        available = removeConflicts(available, existingBookings, bufferMs);
+      }
+
+      activeDates.push({ dateStr, totalSlots, available });
+    }
+
+    // Fetch calendar busy data for all active dates in one batch per calendar
+    const readCalendars = app.db.prepare(
+      "SELECT cc.* FROM profile_read_calendars prc JOIN calendar_connections cc ON prc.calendar_connection_id = cc.id WHERE prc.profile_id = ? AND cc.status = 'connected'"
+    ).all(profile.id);
+
+    let calendarBusyByDate = {};
+    if (readCalendars.length > 0 && activeDates.length > 0) {
+      const firstDate = activeDates[0].dateStr;
+      const lastDate = activeDates[activeDates.length - 1].dateStr;
+      const rangeMin = firstDate + 'T00:00:00Z';
+      const rangeMax = lastDate + 'T23:59:59Z';
+
+      const allBusy = [];
+      const calResults = await Promise.allSettled(readCalendars.map(async (cal) => {
+        const accessToken = await getValidTokenForConnection(app.db, encryptionKey, cal);
+        if (cal.provider === 'google') {
+          const response = await fetchWithTimeout(app.fetchFn, 'https://www.googleapis.com/calendar/v3/freeBusy', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ timeMin: rangeMin, timeMax: rangeMax, items: [{ id: 'primary' }] }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            return data.calendars?.primary?.busy || [];
+          }
+        } else if (cal.provider === 'microsoft') {
+          const response = await fetchWithTimeout(app.fetchFn, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ schedules: [cal.email], startTime: { dateTime: rangeMin, timeZone: 'UTC' }, endTime: { dateTime: rangeMax, timeZone: 'UTC' } }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            return (data.value?.[0]?.scheduleItems || []).map(item => ({ start: item.start.dateTime, end: item.end.dateTime }));
+          }
+        } else if (cal.provider === 'zoho') {
+          const params = new URLSearchParams({ stime: rangeMin, etime: rangeMax });
+          const response = await fetchWithTimeout(app.fetchFn, `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`, {
+            headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+          });
+          if (response.ok) {
+            const data = await response.json();
+            return (data.fb_data || []).filter(s => s.fbtype === 'busy').map(s => ({ start: s.s_datetime, end: s.e_datetime }));
+          }
+        }
+        return [];
+      }));
+
+      for (const r of calResults) {
+        if (r.status === 'fulfilled' && r.value) allBusy.push(...r.value);
+      }
+
+      // Group busy slots by date
+      for (const busy of allBusy) {
+        const busyDate = busy.start.split('T')[0];
+        if (!calendarBusyByDate[busyDate]) calendarBusyByDate[busyDate] = [];
+        calendarBusyByDate[busyDate].push(busy);
+      }
+    }
+
+    for (const { dateStr, totalSlots, available } of activeDates) {
+      let finalAvailable = available;
+      const dayBusy = calendarBusyByDate[dateStr];
+      if (dayBusy && dayBusy.length > 0) {
+        finalAvailable = removeConflicts(finalAvailable, dayBusy, bufferMs);
+      }
+
+      const ratio = finalAvailable.length / totalSlots.length;
+      if (ratio === 0) {
+        result[dateStr] = 'full';
+      } else if (ratio <= 0.3) {
+        result[dateStr] = 'high';
+      } else if (ratio <= 0.6) {
+        result[dateStr] = 'medium';
+      } else {
+        result[dateStr] = 'low';
+      }
+    }
+
+    return { busyness: result };
   });
 }
 
@@ -791,9 +987,13 @@ function registerSlotsApi(app, { encryptionKey }) {
       slots = removeConflicts(slots, existingBookings, bufferMs);
     }
 
-    const busySlots = await getCalendarBusySlots(app.db, encryptionKey, profile.id, date, app.fetchFn);
-    if (busySlots.length > 0) {
-      slots = removeConflicts(slots, busySlots, bufferMs);
+    try {
+      const busySlots = await getCalendarBusySlots(app.db, encryptionKey, profile.id, date, app.fetchFn);
+      if (busySlots.length > 0) {
+        slots = removeConflicts(slots, busySlots, bufferMs);
+      }
+    } catch {
+      // If calendar API fails, return slots without conflict filtering rather than erroring
     }
 
     return { slots };
@@ -1162,4 +1362,4 @@ function registerCancellationApi(app, { encryptionKey }) {
   });
 }
 
-module.exports = { registerBookingRoutes, registerSlotsApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook, computeSlots, removeConflicts, getCalendarBusySlots, getExistingBookings, VALID_DURATIONS };
+module.exports = { registerBookingRoutes, registerSlotsApi, registerBusynessApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook, computeSlots, removeConflicts, getCalendarBusySlots, getExistingBookings, VALID_DURATIONS };

@@ -186,6 +186,21 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
       </div>
     </div>`;
 
+  const SHORT_DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+  function formatTimeLabel(val) {
+    const [h, m] = val.split(':').map(Number);
+    const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    const ampm = h < 12 ? 'AM' : 'PM';
+    return `${String(hour12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+  }
+
+  function buildTimeDropdown(name, selectedValue, disabled) {
+    const label = formatTimeLabel(selectedValue);
+    const disabledAttr = disabled ? ' disabled' : '';
+    return `<div class="time-dropdown${disabled ? ' disabled' : ''}"><input type="hidden" name="${name}" value="${selectedValue}"${disabledAttr}><button type="button" class="time-dropdown-trigger"${disabledAttr}><span class="time-dropdown-value">${label}</span><i class="ph ph-caret-down"></i></button></div>`;
+  }
+
   const scheduleHtml = `<div class="schedule-grid">` + DAYS.map((dayName, dayIdx) => {
     const daySchedules = (schedules.templates || []).filter(s => s.day_of_week === dayIdx);
     const isActive = daySchedules.length > 0;
@@ -195,31 +210,33 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
       rangesHtml = daySchedules.map(s => {
         const localStart = convertUTCToLocalTime(s.start_time, adminTimezone);
         const localEnd = convertUTCToLocalTime(s.end_time, adminTimezone);
-        return `<div class="time-range"><input type="text" class="time-picker" name="schedule[${dayIdx}][start][]" value="${localStart}" required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"> <span>-</span> <input type="text" class="time-picker" name="schedule[${dayIdx}][end][]" value="${localEnd}" required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"><button type="button" class="danger outline remove-range" style="padding:4px 8px; border:none;" title="Remove">✕</button></div>`;
+        return `<div class="time-range">${buildTimeDropdown(`schedule[${dayIdx}][start][]`, localStart, false)}<span class="time-range-sep">–</span>${buildTimeDropdown(`schedule[${dayIdx}][end][]`, localEnd, false)}<button type="button" class="remove-range-btn remove-range" title="Remove"><i class="ph ph-trash"></i></button></div>`;
       }).join('');
     } else {
-      rangesHtml = `<div class="time-range"><input type="text" class="time-picker" name="schedule[${dayIdx}][start][]" value="09:00" disabled required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"> <span>-</span> <input type="text" class="time-picker" name="schedule[${dayIdx}][end][]" value="17:00" disabled required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"><button type="button" class="danger outline remove-range" style="padding:4px 8px; border:none;" title="Remove">✕</button></div>`;
+      rangesHtml = `<div class="time-range">${buildTimeDropdown(`schedule[${dayIdx}][start][]`, '09:00', true)}<span class="time-range-sep">–</span>${buildTimeDropdown(`schedule[${dayIdx}][end][]`, '17:00', true)}<button type="button" class="remove-range-btn remove-range" title="Remove"><i class="ph ph-trash"></i></button></div>`;
     }
 
     return `
       <div class="schedule-day ${isActive ? '' : 'disabled'}" id="day-row-${dayIdx}">
         <div class="day-toggle">
-          <input type="checkbox" class="toggle-day-cb" data-day="${dayIdx}" id="toggle-${dayIdx}" ${isActive ? 'checked' : ''}>
-          <label for="toggle-${dayIdx}">${dayName}</label>
+          <label class="toggle-switch">
+            <input type="checkbox" class="toggle-day-cb" data-day="${dayIdx}" id="toggle-${dayIdx}" ${isActive ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="day-label">${SHORT_DAYS[dayIdx]}</span>
         </div>
         <div class="time-ranges" id="ranges-${dayIdx}" style="${isActive ? '' : 'display:none;'}">
           <div class="ranges-container" id="container-${dayIdx}">${rangesHtml}</div>
-          <div style="margin-top: 8px; display: flex; gap: 8px;">
-            <button type="button" class="outline add-range-btn" data-day="${dayIdx}" style="padding: 4px 8px; font-size: 12px;">+ Add Hours</button>
-            <button type="button" class="outline copy-btn" data-day="${dayIdx}" style="padding: 4px 8px; font-size: 12px;">Copy to All</button>
-          </div>
         </div>
-        <div class="unavailable-text" id="unavail-${dayIdx}" style="${isActive ? 'display:none;' : 'margin-top:4px; font-size: 14px; color: var(--text-secondary);'}">
+        <div class="schedule-day-actions" id="actions-${dayIdx}" style="${isActive ? '' : 'display:none;'}">
+          <button type="button" class="schedule-action-btn add-range-btn" data-day="${dayIdx}" title="Add time range"><i class="ph ph-plus"></i></button>
+        </div>
+        <div class="unavailable-text" id="unavail-${dayIdx}" style="${isActive ? 'display:none;' : ''}">
           Unavailable
         </div>
       </div>
     `;
-  }).join('') + `</div>`;
+  }).join('') + `</div><button type="button" class="copy-times-link" id="copy-times-trigger"><i class="ph ph-copy"></i> Copy times to...</button>`;
 
   const overrideSection = overridesHtml(overrides || []);
 
@@ -250,7 +267,8 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           <span class="floating-modal-subtitle">One-on-One</span>
         </div>
 
-        ${error ? `<div role="alert" class="error" style="margin: 16px 24px;">${escapeHtml(error)}</div>` : ''}
+        <div class="floating-modal-body">
+        ${error ? `<div role="alert" class="error" style="margin-bottom: 16px;">${escapeHtml(error)}</div>` : ''}
 
         <form id="profile-form" method="POST" action="${action}">
           <input type="hidden" name="_csrf" value="${token}">
@@ -453,6 +471,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             </div>
           </div>
         </form>
+        </div>
 
         <div class="floating-modal-footer">
           <a href="/admin/profiles" class="btn-secondary">Cancel</a>
@@ -463,7 +482,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
         </div>
 
         ${isEdit ? `
-        <form id="delete-profile-form" method="POST" action="/admin/profiles/${profile.id}/delete" style="display:none;" onsubmit="return confirm('Are you sure you want to delete this profile? All bookings and settings associated with it will be permanently deleted.');">
+        <form id="delete-profile-form" method="POST" action="/admin/profiles/${profile.id}/delete" style="display:none;" onsubmit="event.preventDefault(); var f=this; AppModal.confirm('All bookings and settings associated with this profile will be permanently deleted.', function(){f.submit()}, {title:'Delete Profile', confirmText:'Delete', danger:true, icon:'<i class=\\'ph-fill ph-trash\\' style=\\'font-size:32px;color:var(--error)\\'></i>'}); return false;">
           <input type="hidden" name="_csrf" value="${token}">
         </form>
         ` : ''}
@@ -475,7 +494,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
         section.classList.toggle('open');
       }
 
-      document.addEventListener('DOMContentLoaded', () => {
+      (function() {
         flatpickr('.time-picker-override', { enableTime: true, noCalendar: true, dateFormat: "H:i", time_24hr: true });
 
         document.getElementById('new_override_type').addEventListener('change', (e) => {
@@ -495,7 +514,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
         document.getElementById('add-override-btn').addEventListener('click', () => {
           const date = document.getElementById('new_override_date').value;
           const type = document.getElementById('new_override_type').value;
-          if (!date) return alert('Please select a date.');
+          if (!date) return AppModal.alert('Please select a date.', {title:'Missing Date'});
 
           const isBlocked = type === 'blocked';
           let customRangesStr = '';
@@ -504,7 +523,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           if (!isBlocked) {
             const start = document.getElementById('new_override_start').value;
             const end = document.getElementById('new_override_end').value;
-            if (!start || !end) return alert('Please select start and end times.');
+            if (!start || !end) return AppModal.alert('Please select start and end times.', {title:'Missing Times'});
             const ranges = [{ start, end }];
             customRangesStr = JSON.stringify(ranges);
             rangesDisplay = start + ' - ' + end;
@@ -532,36 +551,122 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           document.getElementById('new_override_date').value = '';
         });
 
+        // Custom time dropdown logic
+        window.TimeDropdown = {
+          timeSlots: (function() {
+            const slots = [];
+            for (let h = 0; h < 24; h++) {
+              for (let m = 0; m < 60; m += 15) {
+                const val = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+                const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                const ampm = h < 12 ? 'AM' : 'PM';
+                const label = String(hour12).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+                slots.push({ val, label });
+              }
+            }
+            return slots;
+          })(),
+          formatLabel: function(val) {
+            const s = this.timeSlots.find(t => t.val === val);
+            return s ? s.label : val;
+          },
+          createDropdownHtml: function(name, val, disabled) {
+            const label = this.formatLabel(val);
+            const dis = disabled ? ' disabled' : '';
+            return '<div class="time-dropdown' + (disabled ? ' disabled' : '') + '"><input type="hidden" name="' + name + '" value="' + val + '"' + dis + '><button type="button" class="time-dropdown-trigger"' + dis + '><span class="time-dropdown-value">' + label + '</span><i class="ph ph-caret-down"></i></button></div>';
+          },
+          open: function(trigger) {
+            this.closeAll();
+            const dropdown = trigger.closest('.time-dropdown');
+            const hiddenInput = dropdown.querySelector('input[type="hidden"]');
+            const panel = document.createElement('div');
+            panel.className = 'time-dropdown-panel';
+            const currentVal = hiddenInput.value;
+            let scrollTarget = null;
+            this.timeSlots.forEach(function(slot) {
+              const item = document.createElement('div');
+              item.className = 'time-dropdown-item' + (slot.val === currentVal ? ' active' : '');
+              item.textContent = slot.label;
+              item.dataset.value = slot.val;
+              if (slot.val === currentVal) scrollTarget = item;
+              panel.appendChild(item);
+            });
+            dropdown.appendChild(panel);
+            dropdown.classList.add('open');
+            if (scrollTarget) scrollTarget.scrollIntoView({ block: 'center' });
+            panel.addEventListener('click', function(e) {
+              const item = e.target.closest('.time-dropdown-item');
+              if (!item) return;
+              hiddenInput.value = item.dataset.value;
+              trigger.querySelector('.time-dropdown-value').textContent = item.textContent;
+              panel.querySelectorAll('.time-dropdown-item').forEach(i => i.classList.remove('active'));
+              item.classList.add('active');
+              dropdown.classList.remove('open');
+              panel.remove();
+            });
+          },
+          closeAll: function() {
+            document.querySelectorAll('.time-dropdown.open').forEach(function(d) {
+              d.classList.remove('open');
+              const p = d.querySelector('.time-dropdown-panel');
+              if (p) p.remove();
+            });
+          }
+        };
+
+        document.addEventListener('click', function(e) {
+          const trigger = e.target.closest('.time-dropdown-trigger');
+          if (trigger && !trigger.disabled) {
+            e.stopPropagation();
+            TimeDropdown.open(trigger);
+            return;
+          }
+          if (!e.target.closest('.time-dropdown-panel')) {
+            TimeDropdown.closeAll();
+          }
+        });
+
+        function makeProfileTimeRange(day, startVal, endVal) {
+          const div = document.createElement('div');
+          div.className = 'time-range';
+          div.innerHTML = TimeDropdown.createDropdownHtml('schedule[' + day + '][start][]', startVal, false) + '<span class="time-range-sep">–</span>' + TimeDropdown.createDropdownHtml('schedule[' + day + '][end][]', endVal, false) + '<button type="button" class="remove-range-btn remove-range" title="Remove"><i class="ph ph-trash"></i></button>';
+          return div;
+        }
+
         // Toggle Day
         document.querySelectorAll('.toggle-day-cb').forEach(cb => {
           cb.addEventListener('change', (e) => {
             const day = e.target.dataset.day;
             const row = document.getElementById('day-row-' + day);
             const rangesDiv = document.getElementById('ranges-' + day);
+            const actionsDiv = document.getElementById('actions-' + day);
             const unavailText = document.getElementById('unavail-' + day);
 
             if (e.target.checked) {
               row.classList.remove('disabled');
-              rangesDiv.style.display = 'block';
+              rangesDiv.style.display = '';
+              if (actionsDiv) actionsDiv.style.display = '';
               unavailText.style.display = 'none';
-              rangesDiv.querySelectorAll('input').forEach(inp => {
-                inp.disabled = false;
-              });
+              rangesDiv.querySelectorAll('input[type="hidden"]').forEach(s => s.disabled = false);
+              rangesDiv.querySelectorAll('.time-dropdown').forEach(d => d.classList.remove('disabled'));
+              rangesDiv.querySelectorAll('.time-dropdown-trigger').forEach(b => b.disabled = false);
             } else {
               row.classList.add('disabled');
               rangesDiv.style.display = 'none';
-              unavailText.style.display = 'block';
-              rangesDiv.querySelectorAll('input').forEach(inp => {
-                inp.disabled = true;
-              });
+              if (actionsDiv) actionsDiv.style.display = 'none';
+              unavailText.style.display = '';
+              rangesDiv.querySelectorAll('input[type="hidden"]').forEach(s => s.disabled = true);
+              rangesDiv.querySelectorAll('.time-dropdown').forEach(d => d.classList.add('disabled'));
+              rangesDiv.querySelectorAll('.time-dropdown-trigger').forEach(b => b.disabled = true);
             }
           });
         });
 
         // Remove Range
         document.addEventListener('click', (e) => {
-          if (e.target.classList.contains('remove-range')) {
-            const timeRange = e.target.closest('.time-range');
+          if (e.target.classList.contains('remove-range') || e.target.closest('.remove-range')) {
+            const btn = e.target.classList.contains('remove-range') ? e.target : e.target.closest('.remove-range');
+            const timeRange = btn.closest('.time-range');
             const container = timeRange.parentElement;
             timeRange.remove();
 
@@ -571,8 +676,11 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               if (cb) {
                 cb.checked = false;
                 cb.dispatchEvent(new Event('change'));
-                container.innerHTML = \`<div class="time-range"><input type="text" class="time-picker" name="schedule[\${day}][start][]" value="09:00" disabled required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"> <span>-</span> <input type="text" class="time-picker" name="schedule[\${day}][end][]" value="17:00" disabled required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"><button type="button" class="danger outline remove-range" style="padding:4px 8px; border:none;" title="Remove">✕</button></div>\`;
-                if(window.initTimePickers) window.initTimePickers();
+                const defaultRange = makeProfileTimeRange(day, '09:00', '17:00');
+                defaultRange.querySelectorAll('input[type="hidden"]').forEach(s => s.disabled = true);
+                defaultRange.querySelectorAll('.time-dropdown').forEach(d => d.classList.add('disabled'));
+                defaultRange.querySelectorAll('.time-dropdown-trigger').forEach(b => b.disabled = true);
+                container.appendChild(defaultRange);
               }
             }
           }
@@ -581,45 +689,39 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
         // Add Range
         document.querySelectorAll('.add-range-btn').forEach(btn => {
           btn.addEventListener('click', (e) => {
-            const day = e.target.dataset.day;
+            const day = e.target.closest('.schedule-action-btn').dataset.day;
             const container = document.getElementById('container-' + day);
-            const div = document.createElement('div');
-            div.className = 'time-range';
-            div.innerHTML = \`<input type="text" class="time-picker" name="schedule[\${day}][start][]" value="09:00" required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"> <span>-</span> <input type="text" class="time-picker" name="schedule[\${day}][end][]" value="17:00" required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"><button type="button" class="danger outline remove-range" style="padding:4px 8px; border:none;" title="Remove">✕</button>\`;
-            container.appendChild(div);
-            if(window.initTimePickers) window.initTimePickers();
+            container.appendChild(makeProfileTimeRange(day, '09:00', '17:00'));
           });
         });
 
-        // Copy to All
-        document.querySelectorAll('.copy-btn').forEach(btn => {
-          btn.addEventListener('click', (e) => {
-            const sourceDay = e.target.dataset.day;
+        // Copy times to... trigger
+        const copyTrigger = document.getElementById('copy-times-trigger');
+        if (copyTrigger) {
+          copyTrigger.addEventListener('click', () => {
+            const activeDays = [];
+            for (let i = 0; i < 7; i++) {
+              if (document.getElementById('toggle-' + i).checked) activeDays.push(i);
+            }
+            if (activeDays.length === 0) return;
+            const sourceDay = activeDays[0];
             const sourceContainer = document.getElementById('container-' + sourceDay);
-            const sourceInputs = Array.from(sourceContainer.querySelectorAll('.time-range')).map(tr => {
-              const start = tr.querySelector('input[name*="[start]"]').value;
-              const end = tr.querySelector('input[name*="[end]"]').value;
-              return {start, end};
+            const values = Array.from(sourceContainer.querySelectorAll('.time-range')).map(r => {
+              const inputs = r.querySelectorAll('input[type="hidden"]');
+              return { start: inputs[0].value, end: inputs[1].value };
             });
 
-            for (let i = 0; i <= 6; i++) {
-              if (i == sourceDay) continue;
+            for (let i = 0; i < 7; i++) {
+              if (i === sourceDay) continue;
               const cb = document.getElementById('toggle-' + i);
               cb.checked = true;
               cb.dispatchEvent(new Event('change'));
-
               const container = document.getElementById('container-' + i);
-              container.innerHTML = sourceInputs.map(val =>
-                \`<div class="time-range"><input type="text" class="time-picker" name="schedule[\${i}][start][]" value="\${val.start}" required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"> <span>-</span> <input type="text" class="time-picker" name="schedule[\${i}][end][]" value="\${val.end}" required style="width: 120px; padding: 0.5rem; margin-bottom: 0;"><button type="button" class="danger outline remove-range" style="padding:4px 8px; border:none;" title="Remove">✕</button></div>\`
-              ).join('');
+              container.innerHTML = '';
+              values.forEach(v => container.appendChild(makeProfileTimeRange(i, v.start, v.end)));
             }
-            if(window.initTimePickers) window.initTimePickers();
-
-            const originalText = e.target.textContent;
-            e.target.textContent = 'Copied!';
-            setTimeout(() => { e.target.textContent = originalText; }, 2000);
           });
-        });
+        }
 
         // Profile guests tag input
         (function() {
@@ -675,13 +777,14 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
 
           renderTags();
         })();
-      });
+      })();
     </script>
   `;
 }
 
 function registerProfileRoutes(app) {
   app.get('/profiles', async (request, reply) => {
+    const token = reply.generateCsrf();
     const profiles = app.db.prepare("SELECT * FROM booking_profiles ORDER BY created_at DESC").all();
     const baseUrl = `${request.protocol}://${request.hostname}${request.port && request.port !== 80 && request.port !== 443 ? ':' + request.port : ''}`;
 
@@ -725,41 +828,223 @@ function registerProfileRoutes(app) {
             </button>
             <div class="dropdown-menu" id="menu-${p.id}" style="display:none;">
               <a href="${bookingUrl}" target="_blank" class="dropdown-item"><i class="ph ph-eye"></i> View booking page</a>
-              <a href="/admin/profiles/${p.id}/edit" class="dropdown-item"><i class="ph ph-pencil-simple"></i> Edit</a>
+              <button class="dropdown-item profile-overlay-trigger" data-url="/admin/profiles/${p.id}/edit?partial=1"><i class="ph ph-pencil-simple"></i> Edit</button>
               <hr style="margin: 4px 0; border: none; border-top: 1px solid #e8e8e8;">
-              <button class="dropdown-item danger" onclick="if(confirm('Delete this profile?')) window.location.href='/admin/profiles/${p.id}/delete'"><i class="ph ph-trash"></i> Delete</button>
+              <form method="POST" action="/admin/profiles/${p.id}/delete" id="delete-form-${p.id}" style="display:none"><input type="hidden" name="_csrf" value="${token}"></form>
+              <button class="dropdown-item danger" onclick="AppModal.confirm('Are you sure you want to delete this profile?', function(){document.getElementById('delete-form-${p.id}').submit()}, {title:'Delete Profile', confirmText:'Delete', danger:true, icon:'<i class=\\'ph-fill ph-trash\\' style=\\'font-size:32px;color:var(--error)\\'></i>'})"><i class="ph ph-trash"></i> Delete</button>
             </div>
           </div>
         </div>
       </div>
     `}).join('');
 
+    const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
+    const defaultSchedules = app.db.prepare(
+      "SELECT day_of_week, start_time, end_time FROM default_schedule_templates ORDER BY day_of_week, start_time"
+    ).all();
+
+    const SHORT_DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+    function buildDefaultTimeDropdown(name, selectedValue, disabled) {
+      const [h, m] = selectedValue.split(':').map(Number);
+      const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      const ampm = h < 12 ? 'AM' : 'PM';
+      const label = `${String(hour12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+      const disabledAttr = disabled ? ' disabled' : '';
+      return `<div class="time-dropdown${disabled ? ' disabled' : ''}"><input type="hidden" name="${name}" value="${selectedValue}"${disabledAttr}><button type="button" class="time-dropdown-trigger"${disabledAttr}><span class="time-dropdown-value">${label}</span><i class="ph ph-caret-down"></i></button></div>`;
+    }
+
+    const defaultScheduleHtml = DAYS.map((dayName, dayIdx) => {
+      const daySchedules = defaultSchedules.filter(s => s.day_of_week === dayIdx);
+      const isActive = daySchedules.length > 0;
+
+      let rangesHtml = '';
+      if (isActive) {
+        rangesHtml = daySchedules.map(s => {
+          const localStart = convertUTCToLocalTime(s.start_time, adminTimezone);
+          const localEnd = convertUTCToLocalTime(s.end_time, adminTimezone);
+          return `<div class="time-range">${buildDefaultTimeDropdown(`default_schedule[${dayIdx}][start][]`, localStart, false)}<span class="time-range-sep">–</span>${buildDefaultTimeDropdown(`default_schedule[${dayIdx}][end][]`, localEnd, false)}<button type="button" class="remove-range-btn remove-range" title="Remove"><i class="ph ph-trash"></i></button></div>`;
+        }).join('');
+      } else {
+        rangesHtml = `<div class="time-range">${buildDefaultTimeDropdown(`default_schedule[${dayIdx}][start][]`, '09:00', true)}<span class="time-range-sep">–</span>${buildDefaultTimeDropdown(`default_schedule[${dayIdx}][end][]`, '17:00', true)}<button type="button" class="remove-range-btn remove-range" title="Remove"><i class="ph ph-trash"></i></button></div>`;
+      }
+
+      return `
+        <div class="schedule-day ${isActive ? '' : 'disabled'}" id="default-day-row-${dayIdx}">
+          <div class="day-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" class="toggle-default-day-cb" data-day="${dayIdx}" id="default-toggle-${dayIdx}" ${isActive ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="day-label">${SHORT_DAYS[dayIdx]}</span>
+          </div>
+          <div class="time-ranges" id="default-ranges-${dayIdx}" style="${isActive ? '' : 'display:none;'}">
+            <div class="ranges-container" id="default-container-${dayIdx}">${rangesHtml}</div>
+          </div>
+          <div class="schedule-day-actions" id="default-actions-${dayIdx}" style="${isActive ? '' : 'display:none;'}">
+            <button type="button" class="schedule-action-btn add-default-range-btn" data-day="${dayIdx}" title="Add time range"><i class="ph ph-plus"></i></button>
+          </div>
+          <div class="unavailable-text" id="default-unavail-${dayIdx}" style="${isActive ? 'display:none;' : ''}">
+            Unavailable
+          </div>
+        </div>
+      `;
+    }).join('') + '<button type="button" class="copy-times-link" id="default-copy-times-trigger"><i class="ph ph-copy"></i> Copy times to...</button>';
+
     const html = `
       <div class="profiles-container">
         <div class="profiles-header">
           <h1>Profiles</h1>
           <div class="profiles-header-actions">
-            <button type="button" class="outline" onclick="alert('Manage availability feature coming soon!')">
-              <i class="ph ph-calendar"></i> Manage availability
-            </button>
-            <a href="/admin/profiles/new" role="button" class="contrast">
+            <button type="button" class="contrast profile-overlay-trigger" data-url="/admin/profiles/new?partial=1">
               <i class="ph ph-plus"></i> Create
-            </a>
+            </button>
           </div>
         </div>
 
-        <div class="profiles-list">
-          ${rows || `<div class="calendars-empty">
-              <div class="calendars-empty-icon">
-                <i class="ph-duotone ph-user-circle-plus"></i>
+        <div class="profiles-tabs">
+          <button class="profiles-tab active" data-tab="profiles-tab-content"><i class="ph ph-user-list"></i> Profiles</button>
+          <button class="profiles-tab" data-tab="availability-tab-content"><i class="ph ph-calendar-blank"></i> Availability</button>
+        </div>
+
+        <div id="profiles-tab-content" class="profiles-tab-panel active">
+          <div class="profiles-list">
+            ${rows || `<div class="calendars-empty">
+                <div class="calendars-empty-icon">
+                  <i class="ph-duotone ph-user-circle-plus"></i>
+                </div>
+                <h3>No profiles yet</h3>
+                <a href="/admin/profiles/new" class="btn-primary" style="margin-top: 16px;"><i class="ph-bold ph-plus"></i> Create Profile</a>
+              </div>`}
+          </div>
+        </div>
+
+        <div id="availability-tab-content" class="profiles-tab-panel">
+          <div class="availability-section">
+            <div class="availability-header">
+              <div>
+                <h2 style="margin: 0 0 4px 0; font-size: 1.25rem;">Default Weekly Hours</h2>
+                <p style="margin: 0; color: var(--text-secondary); font-size: 0.875rem;">Set your default availability. New profiles will use these hours automatically.</p>
               </div>
-              <h3>No profiles yet</h3>
-              <a href="/admin/profiles/new" class="btn-primary" style="margin-top: 16px;"><i class="ph-bold ph-plus"></i> Create Profile</a>
-            </div>`}
+            </div>
+            <form id="default-availability-form" method="POST" action="/admin/profiles/default-availability">
+              <input type="hidden" name="_csrf" value="${reply.generateCsrf()}">
+              <div class="schedule-grid">
+                ${defaultScheduleHtml}
+              </div>
+              <div style="margin-top: 24px; display: flex; justify-content: flex-end;">
+                <button type="submit" class="contrast">Save Changes</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div id="profile-overlay" class="profile-overlay" style="display:none">
+        <div class="profile-overlay-backdrop"></div>
+        <div class="profile-overlay-panel">
+          <div class="profile-overlay-content" id="profile-overlay-content"></div>
         </div>
       </div>
 
       <script>
+        // Profile overlay logic
+        (function() {
+          var overlay = document.getElementById('profile-overlay');
+          var content = document.getElementById('profile-overlay-content');
+
+          function openOverlay(url) {
+            overlay.style.display = 'flex';
+            content.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:64px;"><i class="ph-bold ph-spinner loading" style="font-size:24px;opacity:0.5;"></i></div>';
+            document.body.style.overflow = 'hidden';
+            fetch(url)
+              .then(function(res) { return res.text(); })
+              .then(function(html) {
+                content.innerHTML = html;
+                // Execute scripts in the loaded content
+                content.querySelectorAll('script').forEach(function(oldScript) {
+                  var newScript = document.createElement('script');
+                  newScript.textContent = oldScript.textContent;
+                  oldScript.parentNode.replaceChild(newScript, oldScript);
+                });
+                // Re-init time pickers if available
+                if (window.initTimePickers) window.initTimePickers();
+              });
+          }
+
+          function closeOverlay() {
+            overlay.style.display = 'none';
+            content.innerHTML = '';
+            document.body.style.overflow = '';
+          }
+
+          // Open triggers
+          document.addEventListener('click', function(e) {
+            var trigger = e.target.closest('.profile-overlay-trigger');
+            if (trigger) {
+              e.preventDefault();
+              // Close any open dropdown menus
+              document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.style.display = 'none'; });
+              openOverlay(trigger.dataset.url);
+            }
+          });
+
+          // Close on backdrop click
+          overlay.querySelector('.profile-overlay-backdrop').addEventListener('click', closeOverlay);
+
+          // Close on Cancel button clicks inside overlay
+          document.addEventListener('click', function(e) {
+            if (e.target.closest('#profile-overlay') && e.target.closest('a[href="/admin/profiles"]')) {
+              e.preventDefault();
+              closeOverlay();
+            }
+          });
+
+          // Intercept form submission inside overlay
+          document.addEventListener('submit', function(e) {
+            var form = e.target;
+            if (!form.closest('#profile-overlay')) return;
+            if (form.id === 'delete-profile-form') return; // Let delete go through normally
+            e.preventDefault();
+            var formData = new FormData(form);
+            fetch(form.action + (form.action.includes('?') ? '&' : '?') + 'partial=1', {
+              method: 'POST',
+              body: new URLSearchParams(formData),
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              redirect: 'manual'
+            }).then(function(res) {
+              if (res.status === 0 || res.type === 'opaqueredirect' || res.status === 302 || res.status === 303) {
+                closeOverlay();
+                window.location.reload();
+              } else {
+                return res.text();
+              }
+            }).then(function(html) {
+              if (html) {
+                content.innerHTML = html;
+                content.querySelectorAll('script').forEach(function(oldScript) {
+                  var newScript = document.createElement('script');
+                  newScript.textContent = oldScript.textContent;
+                  oldScript.parentNode.replaceChild(newScript, oldScript);
+                });
+                if (window.initTimePickers) window.initTimePickers();
+              }
+            });
+          });
+
+          window.ProfileOverlay = { open: openOverlay, close: closeOverlay };
+        })();
+
+        // Tab switching
+        document.querySelectorAll('.profiles-tab').forEach(tab => {
+          tab.addEventListener('click', function() {
+            document.querySelectorAll('.profiles-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.profiles-tab-panel').forEach(p => p.classList.remove('active'));
+            this.classList.add('active');
+            document.getElementById(this.dataset.tab).classList.add('active');
+          });
+        });
+
         // Copy link functionality
         document.querySelectorAll('.copy-link-btn').forEach(btn => {
           btn.addEventListener('click', function() {
@@ -794,17 +1079,212 @@ function registerProfileRoutes(app) {
         document.addEventListener('click', () => {
           document.querySelectorAll('.dropdown-menu').forEach(m => m.style.display = 'none');
         });
+
+        // Custom time dropdown logic for default availability
+        window.TimeDropdown = window.TimeDropdown || {
+          timeSlots: (function() {
+            const slots = [];
+            for (let h = 0; h < 24; h++) {
+              for (let m = 0; m < 60; m += 15) {
+                const val = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+                const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                const ampm = h < 12 ? 'AM' : 'PM';
+                const label = String(hour12).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+                slots.push({ val, label });
+              }
+            }
+            return slots;
+          })(),
+          formatLabel: function(val) {
+            const s = this.timeSlots.find(function(t) { return t.val === val; });
+            return s ? s.label : val;
+          },
+          createDropdownHtml: function(name, val, disabled) {
+            const label = this.formatLabel(val);
+            const dis = disabled ? ' disabled' : '';
+            return '<div class="time-dropdown' + (disabled ? ' disabled' : '') + '"><input type="hidden" name="' + name + '" value="' + val + '"' + dis + '><button type="button" class="time-dropdown-trigger"' + dis + '><span class="time-dropdown-value">' + label + '</span><i class="ph ph-caret-down"></i></button></div>';
+          },
+          open: function(trigger) {
+            this.closeAll();
+            const dropdown = trigger.closest('.time-dropdown');
+            const hiddenInput = dropdown.querySelector('input[type="hidden"]');
+            const panel = document.createElement('div');
+            panel.className = 'time-dropdown-panel';
+            const currentVal = hiddenInput.value;
+            let scrollTarget = null;
+            this.timeSlots.forEach(function(slot) {
+              const item = document.createElement('div');
+              item.className = 'time-dropdown-item' + (slot.val === currentVal ? ' active' : '');
+              item.textContent = slot.label;
+              item.dataset.value = slot.val;
+              if (slot.val === currentVal) scrollTarget = item;
+              panel.appendChild(item);
+            });
+            dropdown.appendChild(panel);
+            dropdown.classList.add('open');
+            if (scrollTarget) scrollTarget.scrollIntoView({ block: 'center' });
+            panel.addEventListener('click', function(e) {
+              const item = e.target.closest('.time-dropdown-item');
+              if (!item) return;
+              hiddenInput.value = item.dataset.value;
+              trigger.querySelector('.time-dropdown-value').textContent = item.textContent;
+              panel.querySelectorAll('.time-dropdown-item').forEach(function(i) { i.classList.remove('active'); });
+              item.classList.add('active');
+              dropdown.classList.remove('open');
+              panel.remove();
+            });
+          },
+          closeAll: function() {
+            document.querySelectorAll('.time-dropdown.open').forEach(function(d) {
+              d.classList.remove('open');
+              var p = d.querySelector('.time-dropdown-panel');
+              if (p) p.remove();
+            });
+          }
+        };
+
+        document.addEventListener('click', function(e) {
+          var trigger = e.target.closest('.time-dropdown-trigger');
+          if (trigger && !trigger.disabled) {
+            e.stopPropagation();
+            TimeDropdown.open(trigger);
+            return;
+          }
+          if (!e.target.closest('.time-dropdown-panel')) {
+            TimeDropdown.closeAll();
+          }
+        });
+
+        function makeDefaultTimeRange(day, startVal, endVal) {
+          const div = document.createElement('div');
+          div.className = 'time-range';
+          div.innerHTML = TimeDropdown.createDropdownHtml('default_schedule[' + day + '][start][]', startVal, false) + '<span class="time-range-sep">–</span>' + TimeDropdown.createDropdownHtml('default_schedule[' + day + '][end][]', endVal, false) + '<button type="button" class="remove-range-btn remove-range" title="Remove"><i class="ph ph-trash"></i></button>';
+          return div;
+        }
+
+        document.querySelectorAll('.toggle-default-day-cb').forEach(cb => {
+          cb.addEventListener('change', function() {
+            const day = this.dataset.day;
+            const row = document.getElementById('default-day-row-' + day);
+            const ranges = document.getElementById('default-ranges-' + day);
+            const actions = document.getElementById('default-actions-' + day);
+            const unavail = document.getElementById('default-unavail-' + day);
+            const container = document.getElementById('default-container-' + day);
+
+            if (this.checked) {
+              row.classList.remove('disabled');
+              ranges.style.display = '';
+              actions.style.display = '';
+              unavail.style.display = 'none';
+              container.querySelectorAll('input[type="hidden"]').forEach(s => s.disabled = false);
+              container.querySelectorAll('.time-dropdown').forEach(d => d.classList.remove('disabled'));
+              container.querySelectorAll('.time-dropdown-trigger').forEach(b => b.disabled = false);
+            } else {
+              row.classList.add('disabled');
+              ranges.style.display = 'none';
+              actions.style.display = 'none';
+              unavail.style.display = '';
+              container.querySelectorAll('input[type="hidden"]').forEach(s => s.disabled = true);
+              container.querySelectorAll('.time-dropdown').forEach(d => d.classList.add('disabled'));
+              container.querySelectorAll('.time-dropdown-trigger').forEach(b => b.disabled = true);
+            }
+          });
+        });
+
+        document.querySelectorAll('.add-default-range-btn').forEach(btn => {
+          btn.addEventListener('click', function() {
+            const day = this.closest('.schedule-action-btn').dataset.day || this.dataset.day;
+            const container = document.getElementById('default-container-' + day);
+            container.appendChild(makeDefaultTimeRange(day, '09:00', '17:00'));
+          });
+        });
+
+        // Copy times to... for default availability
+        const defaultCopyTrigger = document.getElementById('default-copy-times-trigger');
+        if (defaultCopyTrigger) {
+          defaultCopyTrigger.addEventListener('click', function() {
+            const activeDays = [];
+            for (let i = 0; i < 7; i++) {
+              if (document.getElementById('default-toggle-' + i).checked) {
+                activeDays.push(i);
+              }
+            }
+            if (activeDays.length === 0) return;
+            const sourceDay = activeDays[0];
+            const sourceContainer = document.getElementById('default-container-' + sourceDay);
+            const values = Array.from(sourceContainer.querySelectorAll('.time-range')).map(r => {
+              const inputs = r.querySelectorAll('input[type="hidden"]');
+              return { start: inputs[0].value, end: inputs[1].value };
+            });
+
+            for (let i = 0; i < 7; i++) {
+              if (i === sourceDay) continue;
+              const cb = document.getElementById('default-toggle-' + i);
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              const targetContainer = document.getElementById('default-container-' + i);
+              targetContainer.innerHTML = '';
+              values.forEach(v => {
+                targetContainer.appendChild(makeDefaultTimeRange(i, v.start, v.end));
+              });
+            }
+          });
+        }
+
+        // Remove range button delegation
+        document.getElementById('default-availability-form').addEventListener('click', function(e) {
+          if (e.target.classList.contains('remove-range') || e.target.closest('.remove-range')) {
+            const btn = e.target.classList.contains('remove-range') ? e.target : e.target.closest('.remove-range');
+            btn.closest('.time-range').remove();
+          }
+        });
       </script>
     `;
 
     reply.type('text/html').send(require('./app').BASE_LAYOUT('Profiles', html, true, 'profiles'));
   });
 
+  app.post('/profiles/default-availability', { preHandler: app.csrfProtection }, async (request, reply) => {
+    const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
+    const entries = [];
+    for (let day = 0; day <= 6; day++) {
+      const key = `default_schedule[${day}]`;
+      const starts = request.body[`${key}[start][]`];
+      const ends = request.body[`${key}[end][]`];
+      if (!starts || !ends) continue;
+
+      const startArr = Array.isArray(starts) ? starts : [starts];
+      const endArr = Array.isArray(ends) ? ends : [ends];
+
+      for (let i = 0; i < startArr.length; i++) {
+        if (startArr[i] && endArr[i]) {
+          const utcStart = convertTimeToUTC(startArr[i], adminTimezone);
+          const utcEnd = convertTimeToUTC(endArr[i], adminTimezone);
+          entries.push({ day_of_week: day, start_time: utcStart, end_time: utcEnd });
+        }
+      }
+    }
+
+    app.db.prepare("DELETE FROM default_schedule_templates").run();
+    const insert = app.db.prepare("INSERT INTO default_schedule_templates (day_of_week, start_time, end_time) VALUES (?, ?, ?)");
+    for (const entry of entries) {
+      insert.run(entry.day_of_week, entry.start_time, entry.end_time);
+    }
+
+    return reply.redirect('/admin/profiles');
+  });
+
   app.get('/profiles/new', async (request, reply) => {
     const token = reply.generateCsrf();
     const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE status = 'connected'").all();
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
-    const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, null, [], adminTimezone);
+    const defaultTemplates = app.db.prepare(
+      "SELECT day_of_week, start_time, end_time FROM default_schedule_templates ORDER BY day_of_week, start_time"
+    ).all();
+    const html = profileFormHtml(token, null, calendars, [], { templates: defaultTemplates, readCalendarIds: [] }, null, [], adminTimezone);
+    if (request.query.partial === '1') {
+      return reply.type('text/html').send(html);
+    }
     reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
   });
 
@@ -815,6 +1295,7 @@ function registerProfileRoutes(app) {
       const token = reply.generateCsrf();
       const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE status = 'connected'").all();
       const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.');
+      if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
     }
 
@@ -823,6 +1304,7 @@ function registerProfileRoutes(app) {
       const token = reply.generateCsrf();
       const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE status = 'connected'").all();
       const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'That slug already exists. Please choose a different one.');
+      if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
     }
 
@@ -841,7 +1323,12 @@ function registerProfileRoutes(app) {
     }
 
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
-    const scheduleEntries = parseScheduleFromBody(request.body, adminTimezone);
+    let scheduleEntries = parseScheduleFromBody(request.body, adminTimezone);
+    if (scheduleEntries.length === 0) {
+      scheduleEntries = app.db.prepare(
+        "SELECT day_of_week, start_time, end_time FROM default_schedule_templates ORDER BY day_of_week, start_time"
+      ).all();
+    }
     const insertSchedule = app.db.prepare("INSERT INTO schedule_templates (profile_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)");
     for (const entry of scheduleEntries) {
       insertSchedule.run(profileId, entry.day_of_week, entry.start_time, entry.end_time);
@@ -891,6 +1378,9 @@ function registerProfileRoutes(app) {
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
 
     const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds, writeCalendarIds }, null, overrides, adminTimezone);
+    if (request.query.partial === '1') {
+      return reply.type('text/html').send(html);
+    }
     reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
   });
 
@@ -910,6 +1400,7 @@ function registerProfileRoutes(app) {
       const attendees = app.db.prepare("SELECT email FROM default_attendees WHERE profile_id = ?").all(profile.id).map(a => a.email);
       const templates = app.db.prepare("SELECT * FROM schedule_templates WHERE profile_id = ?").all(profile.id);
       const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.');
+      if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
 
@@ -920,6 +1411,7 @@ function registerProfileRoutes(app) {
       const attendees = app.db.prepare("SELECT email FROM default_attendees WHERE profile_id = ?").all(profile.id).map(a => a.email);
       const templates = app.db.prepare("SELECT * FROM schedule_templates WHERE profile_id = ?").all(profile.id);
       const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'That slug already exists.');
+      if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
 
