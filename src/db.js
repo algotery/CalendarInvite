@@ -6,13 +6,16 @@ function initializeSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS admin (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
-      timezone TEXT NOT NULL DEFAULT 'UTC'
+      timezone TEXT NOT NULL DEFAULT 'UTC',
+      notification_email TEXT DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS calendar_connections (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
       provider TEXT NOT NULL CHECK(provider IN ('google', 'microsoft', 'zoho')),
       encrypted_access_token TEXT,
       encrypted_refresh_token TEXT,
@@ -23,6 +26,7 @@ function initializeSchema(db) {
 
     CREATE TABLE IF NOT EXISTS booking_profiles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
       slug TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
@@ -62,6 +66,7 @@ function initializeSchema(db) {
 
     CREATE TABLE IF NOT EXISTS default_schedule_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
       day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
       start_time TEXT NOT NULL,
       end_time TEXT NOT NULL
@@ -132,6 +137,44 @@ function createDatabase(dbPath) {
   const adminCols = db.pragma('table_info(admin)');
   if (!adminCols.some(c => c.name === 'notification_email')) {
     db.exec("ALTER TABLE admin ADD COLUMN notification_email TEXT DEFAULT ''");
+  }
+
+  // Migration: add email column to admin table
+  if (!adminCols.some(c => c.name === 'email')) {
+    db.exec("ALTER TABLE admin ADD COLUMN email TEXT DEFAULT ''");
+    // Use notification_email if set, otherwise username as fallback
+    db.exec("UPDATE admin SET email = CASE WHEN notification_email != '' THEN notification_email ELSE username END WHERE email = ''");
+    try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_email ON admin(email)"); } catch {}
+  }
+
+  // Migration: add user_id to calendar_connections
+  const ccCols = db.pragma('table_info(calendar_connections)');
+  if (!ccCols.some(c => c.name === 'user_id')) {
+    db.exec("ALTER TABLE calendar_connections ADD COLUMN user_id INTEGER REFERENCES admin(id) DEFAULT NULL");
+    const firstAdmin = db.prepare("SELECT id FROM admin LIMIT 1").get();
+    if (firstAdmin) {
+      db.exec(`UPDATE calendar_connections SET user_id = ${firstAdmin.id} WHERE user_id IS NULL`);
+    }
+  }
+
+  // Migration: add user_id to booking_profiles
+  const bpCols = db.pragma('table_info(booking_profiles)');
+  if (!bpCols.some(c => c.name === 'user_id')) {
+    db.exec("ALTER TABLE booking_profiles ADD COLUMN user_id INTEGER REFERENCES admin(id) DEFAULT NULL");
+    const firstAdmin = db.prepare("SELECT id FROM admin LIMIT 1").get();
+    if (firstAdmin) {
+      db.exec(`UPDATE booking_profiles SET user_id = ${firstAdmin.id} WHERE user_id IS NULL`);
+    }
+  }
+
+  // Migration: add user_id to default_schedule_templates
+  const dstCols = db.pragma('table_info(default_schedule_templates)');
+  if (!dstCols.some(c => c.name === 'user_id')) {
+    db.exec("ALTER TABLE default_schedule_templates ADD COLUMN user_id INTEGER REFERENCES admin(id) DEFAULT NULL");
+    const firstAdmin = db.prepare("SELECT id FROM admin LIMIT 1").get();
+    if (firstAdmin) {
+      db.exec(`UPDATE default_schedule_templates SET user_id = ${firstAdmin.id} WHERE user_id IS NULL`);
+    }
   }
 
   return db;

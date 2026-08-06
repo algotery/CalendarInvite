@@ -79,11 +79,15 @@ function clearTokenCache(connectionId) {
 
 // 4. Query optimization - batch queries
 function getBatchedBookings(db, adminTz, filters = {}) {
-  const { status, profile_id, limit = 100, offset = 0, timeMin, timeMax } = filters;
+  const { status, profile_id, user_id, limit = 100, offset = 0, timeMin, timeMax } = filters;
 
   let where = [];
   let params = [];
 
+  if (user_id) {
+    where.push('bp.user_id = ?');
+    params.push(user_id);
+  }
   if (status && (status === 'confirmed' || status === 'cancelled')) {
     where.push('b.status = ?');
     params.push(status);
@@ -103,7 +107,6 @@ function getBatchedBookings(db, adminTz, filters = {}) {
 
   const whereClause = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
-  // Single optimized query with all needed data
   const bookings = db.prepare(`
     SELECT
       b.*,

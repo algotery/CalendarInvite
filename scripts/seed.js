@@ -7,6 +7,7 @@ const SALT_ROUNDS = 12;
 async function seed() {
   const username = process.env.ADMIN_USERNAME;
   const password = process.env.ADMIN_PASSWORD;
+  const email = process.env.ADMIN_EMAIL || `${username}@localhost`;
 
   if (!username || !password) {
     console.error('ADMIN_USERNAME and ADMIN_PASSWORD environment variables are required');
@@ -24,8 +25,8 @@ async function seed() {
   }
 
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-  db.prepare('INSERT INTO admin (username, password_hash, timezone) VALUES (?, ?, ?)').run(username, passwordHash, 'UTC');
-  console.log(`Admin "${username}" created successfully.`);
+  db.prepare('INSERT INTO admin (email, username, password_hash, timezone, notification_email) VALUES (?, ?, ?, ?, ?)').run(email, username, passwordHash, process.env.ADMIN_TIMEZONE || 'UTC', email);
+  console.log(`Admin "${username}" (${email}) created successfully.`);
   db.close();
 }
 

@@ -1210,8 +1210,8 @@ function registerBookingSubmitApi(app, { encryptionKey }) {
 
     recordEmailBooking(app.db, email.trim(), request.url);
 
-    // Send notification email to admin
-    const admin = app.db.prepare("SELECT notification_email FROM admin LIMIT 1").get();
+    // Send notification email to profile owner
+    const admin = app.db.prepare("SELECT notification_email FROM admin WHERE id = ?").get(profile.user_id);
     if (admin && admin.notification_email) {
       const baseUrl = `${request.protocol}://${request.hostname}${request.port && request.port !== 80 && request.port !== 443 ? ':' + request.port : ''}`;
       const cancelUrl = `${baseUrl}/cancel/${cancellationToken}`;

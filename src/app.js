@@ -53,7 +53,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
       <a href="/admin/settings" class="${activeNav === 'settings' ? 'nav-active' : ''}"><i class="ph-fill ph-gear"></i> Settings</a>
     </nav>
     <div class="sidebar-footer">
-      <a href="/admin/logout"><i class="ph-fill ph-sign-out"></i> Logout</a>
+      <a href="#" onclick="event.preventDefault(); AppModal.confirm('Are you sure you want to logout?', function(){ window.location.href='/admin/logout'; }, {title:'Logout', confirmText:'Logout', icon:'<i class=\\'ph-fill ph-sign-out\\' style=\\'font-size:32px;color:var(--primary)\\'></i>'});"><i class="ph-fill ph-sign-out"></i> Logout</a>
     </div>
   </aside>
   <main class="main-content">
@@ -322,17 +322,17 @@ function buildApp(opts = {}) {
 
     app.get('/login', async (request, reply) => {
       const token = reply.generateCsrf();
-      reply.type('text/html').send(BASE_LAYOUT('Admin Login', `
+      reply.type('text/html').send(BASE_LAYOUT('Login', `
         <div class="login-card">
           <article>
             <div class="login-logo"><i class="ph-duotone ph-calendar-blank" style="font-size: 3rem; color: var(--primary);"></i></div>
             <div class="login-title">CalendarInvite</div>
-            <div class="login-subtitle">Welcome back! Sign in to your admin panel.</div>
+            <div class="login-subtitle">Welcome back! Sign in to your account.</div>
             <form method="POST" action="/admin/login">
               <input type="hidden" name="_csrf" value="${token}">
               <label>
-                Username
-                <input type="text" name="username" placeholder="Enter your username" required autofocus>
+                Email
+                <input type="email" name="email" placeholder="Enter your email" required autofocus>
               </label>
               <label>
                 Password
@@ -340,31 +340,34 @@ function buildApp(opts = {}) {
               </label>
               <button type="submit" style="width: 100%;">Sign In →</button>
             </form>
+            <p style="text-align: center; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
+              Don't have an account? <a href="/admin/register">Create one</a>
+            </p>
           </article>
         </div>
       `));
     });
 
     app.post('/login', { preHandler: app.csrfProtection }, async (request, reply) => {
-      const { username, password } = request.body || {};
+      const { email, password } = request.body || {};
 
-      const admin = app.db.prepare('SELECT * FROM admin WHERE username = ?').get(username);
+      const admin = app.db.prepare('SELECT * FROM admin WHERE email = ?').get(email);
       if (!admin || !(await bcrypt.compare(password || '', admin.password_hash))) {
         const token = reply.generateCsrf();
-        return reply.type('text/html').send(BASE_LAYOUT('Admin Login', `
+        return reply.type('text/html').send(BASE_LAYOUT('Login', `
           <div class="login-card">
             <article>
-              <div class="login-logo">📅</div>
+              <div class="login-logo"><i class="ph-duotone ph-calendar-blank" style="font-size: 3rem; color: var(--primary);"></i></div>
               <div class="login-title">CalendarInvite</div>
-              <div class="login-subtitle">Welcome back! Sign in to your admin panel.</div>
+              <div class="login-subtitle">Welcome back! Sign in to your account.</div>
               <div role="alert" class="error">
-                Invalid username or password. Please try again.
+                Invalid email or password. Please try again.
               </div>
               <form method="POST" action="/admin/login">
                 <input type="hidden" name="_csrf" value="${token}">
                 <label>
-                  Username
-                  <input type="text" name="username" placeholder="Enter your username" value="${escapeHtml(username || '')}" required autofocus>
+                  Email
+                  <input type="email" name="email" placeholder="Enter your email" value="${escapeHtml(email || '')}" required autofocus>
                 </label>
                 <label>
                   Password
@@ -372,6 +375,9 @@ function buildApp(opts = {}) {
                 </label>
                 <button type="submit" style="width: 100%;">Sign In →</button>
               </form>
+              <p style="text-align: center; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
+                Don't have an account? <a href="/admin/register">Create one</a>
+              </p>
             </article>
           </div>
         `));
@@ -381,15 +387,108 @@ function buildApp(opts = {}) {
       return reply.redirect('/admin/dashboard');
     });
 
+    app.get('/register', async (request, reply) => {
+      const token = reply.generateCsrf();
+      reply.type('text/html').send(BASE_LAYOUT('Register', `
+        <div class="login-card">
+          <article>
+            <div class="login-logo"><i class="ph-duotone ph-calendar-blank" style="font-size: 3rem; color: var(--primary);"></i></div>
+            <div class="login-title">CalendarInvite</div>
+            <div class="login-subtitle">Create your account to get started.</div>
+            <form method="POST" action="/admin/register">
+              <input type="hidden" name="_csrf" value="${token}">
+              <label>
+                Email
+                <input type="email" name="email" placeholder="Enter your email" required autofocus>
+              </label>
+              <label>
+                Username
+                <input type="text" name="username" placeholder="Choose a username" required>
+              </label>
+              <label>
+                Password
+                <input type="password" name="password" placeholder="Create a password" required minlength="6">
+              </label>
+              <label>
+                Confirm Password
+                <input type="password" name="confirm_password" placeholder="Confirm your password" required>
+              </label>
+              <button type="submit" style="width: 100%;">Create Account →</button>
+            </form>
+            <p style="text-align: center; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
+              Already have an account? <a href="/admin/login">Sign in</a>
+            </p>
+          </article>
+        </div>
+      `));
+    });
+
+    app.post('/register', { preHandler: app.csrfProtection }, async (request, reply) => {
+      const { email, username, password, confirm_password } = request.body || {};
+      const token = reply.generateCsrf();
+
+      const renderError = (msg) => reply.type('text/html').send(BASE_LAYOUT('Register', `
+        <div class="login-card">
+          <article>
+            <div class="login-logo"><i class="ph-duotone ph-calendar-blank" style="font-size: 3rem; color: var(--primary);"></i></div>
+            <div class="login-title">CalendarInvite</div>
+            <div class="login-subtitle">Create your account to get started.</div>
+            <div role="alert" class="error">${escapeHtml(msg)}</div>
+            <form method="POST" action="/admin/register">
+              <input type="hidden" name="_csrf" value="${token}">
+              <label>
+                Email
+                <input type="email" name="email" placeholder="Enter your email" value="${escapeHtml(email || '')}" required autofocus>
+              </label>
+              <label>
+                Username
+                <input type="text" name="username" placeholder="Choose a username" value="${escapeHtml(username || '')}" required>
+              </label>
+              <label>
+                Password
+                <input type="password" name="password" placeholder="Create a password" required minlength="6">
+              </label>
+              <label>
+                Confirm Password
+                <input type="password" name="confirm_password" placeholder="Confirm your password" required>
+              </label>
+              <button type="submit" style="width: 100%;">Create Account →</button>
+            </form>
+            <p style="text-align: center; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
+              Already have an account? <a href="/admin/login">Sign in</a>
+            </p>
+          </article>
+        </div>
+      `));
+
+      if (!email || !username || !password) return renderError('All fields are required.');
+      if (password !== confirm_password) return renderError('Passwords do not match.');
+      if (password.length < 6) return renderError('Password must be at least 6 characters.');
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return renderError('Invalid email address.');
+
+      const existingEmail = app.db.prepare('SELECT id FROM admin WHERE email = ?').get(email);
+      if (existingEmail) return renderError('An account with this email already exists.');
+
+      const existingUsername = app.db.prepare('SELECT id FROM admin WHERE username = ?').get(username);
+      if (existingUsername) return renderError('This username is already taken.');
+
+      const passwordHash = await bcrypt.hash(password, 10);
+      const result = app.db.prepare('INSERT INTO admin (email, username, password_hash, timezone, notification_email) VALUES (?, ?, ?, ?, ?)').run(email, username.trim(), passwordHash, 'UTC', email);
+
+      request.session.set('adminId', result.lastInsertRowid);
+      return reply.redirect('/admin/dashboard');
+    });
+
     app.addHook('preHandler', async (request, reply) => {
-      // Skip auth for login page and OAuth callback routes
+      // Skip auth for login, register, and OAuth callback routes
       const publicPaths = [
         '/admin/login',
+        '/admin/register',
         '/admin/calendars/callback/google',
         '/admin/calendars/callback/microsoft',
         '/admin/calendars/zoho/callback',
       ];
-      const urlPath = request.url.split('?')[0]; // strip query string
+      const urlPath = request.url.split('?')[0];
       if (publicPaths.includes(urlPath)) return;
       if (!request.session.get('adminId')) {
         return reply.redirect('/admin/login');
@@ -403,12 +502,12 @@ function buildApp(opts = {}) {
       const admin = app.db.prepare('SELECT timezone FROM admin WHERE id = ?').get(adminId);
       const adminTz = admin ? admin.timezone : 'UTC';
 
-      const activeProfiles = app.db.prepare("SELECT COUNT(*) as count FROM booking_profiles WHERE is_active = 1").get().count;
+      const activeProfiles = app.db.prepare("SELECT COUNT(*) as count FROM booking_profiles WHERE is_active = 1 AND user_id = ?").get(adminId).count;
       const now = new Date().toISOString();
-      const upcomingCount = app.db.prepare("SELECT COUNT(*) as count FROM bookings WHERE status = 'confirmed' AND start_time > ?").get(now).count;
+      const upcomingCount = app.db.prepare("SELECT COUNT(*) as count FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > ? AND bp.user_id = ?").get(now, adminId).count;
       const next5 = app.db.prepare(
-        "SELECT b.*, bp.name as profile_name FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > ? ORDER BY b.start_time ASC LIMIT 5"
-      ).all(now);
+        "SELECT b.*, bp.name as profile_name FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > ? AND bp.user_id = ? ORDER BY b.start_time ASC LIMIT 5"
+      ).all(now, adminId);
 
       const next5Cards = next5.map(b => {
         const start = new Date(b.start_time);
@@ -466,7 +565,7 @@ function buildApp(opts = {}) {
           <div class="dashboard-actions">
             <a href="/admin/profiles/new" class="btn-primary profile-overlay-trigger" data-url="/admin/profiles/new?partial=1"><i class="ph-bold ph-plus"></i> New Profile</a>
             <a href="/admin/bookings" class="btn-secondary">View All Bookings</a>
-            <form method="POST" action="/admin/logout" style="margin: 0; padding: 0; border: none; background: none; margin-left: auto;">
+            <form method="POST" action="/admin/logout" style="margin: 0; padding: 0; border: none; background: none; margin-left: auto;" onsubmit="event.preventDefault(); var f=this; AppModal.confirm('Are you sure you want to logout?', function(){f.submit()}, {title:'Logout', confirmText:'Logout', icon:'<i class=\\'ph-fill ph-sign-out\\' style=\\'font-size:32px;color:var(--primary)\\'></i>'}); return false;">
               <input type="hidden" name="_csrf" value="${token}">
               <button type="submit" class="btn-disconnect"><i class="ph-bold ph-sign-out"></i> Logout</button>
             </form>
@@ -525,6 +624,7 @@ function buildApp(opts = {}) {
       }
 
       const bookings = getBatchedBookings(app.db, adminTz, {
+        user_id: adminId,
         status,
         profile_id,
         timeMin,
@@ -649,6 +749,7 @@ function buildApp(opts = {}) {
         const monthName = monthStart.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 
         const allBookings = getBatchedBookings(app.db, adminTz, {
+          user_id: adminId,
           status: 'confirmed',
           timeMin: new Date(calYear, calMonth - 1, 1).toISOString(),
           timeMax: new Date(calYear, calMonth, 1).toISOString(),
@@ -858,7 +959,8 @@ function buildApp(opts = {}) {
 
     app.post('/bookings/:id/cancel', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { id } = request.params;
-      const booking = app.db.prepare("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.id = ?").get(id);
+      const adminId = request.session.get('adminId');
+      const booking = app.db.prepare("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.id = ? AND bp.user_id = ?").get(id, adminId);
 
       if (!booking) {
         return reply.code(404).type('text/html').send(BASE_LAYOUT('Not Found', '<h1>Booking not found</h1>'));
@@ -906,7 +1008,8 @@ function buildApp(opts = {}) {
 
     app.post('/bookings/:id/delete', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { id } = request.params;
-      const booking = app.db.prepare("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.id = ?").get(id);
+      const adminId = request.session.get('adminId');
+      const booking = app.db.prepare("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.id = ? AND bp.user_id = ?").get(id, adminId);
 
       if (!booking) {
         return reply.code(404).type('text/html').send(BASE_LAYOUT('Not Found', '<h1>Booking not found</h1>'));
@@ -960,7 +1063,8 @@ function buildApp(opts = {}) {
     });
 
     app.get('/calendars', async (request, reply) => {
-      const connections = app.db.prepare('SELECT * FROM calendar_connections').all();
+      const adminId = request.session.get('adminId');
+      const connections = app.db.prepare('SELECT * FROM calendar_connections WHERE user_id = ?').all(adminId);
       const token = reply.generateCsrf();
       const icons = {
         google: `<svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>`,
@@ -1087,9 +1191,14 @@ function buildApp(opts = {}) {
         const encryptedAccess = encrypt(tokens.access_token, encryptionKey);
         const encryptedRefresh = tokens.refresh_token ? encrypt(tokens.refresh_token, encryptionKey) : null;
 
+        const userId = request.session.get('adminId');
+        if (!userId) {
+          return reply.redirect('/admin/login');
+        }
+
         const existing = app.db.prepare(
-          'SELECT id FROM calendar_connections WHERE provider = ? AND email = ?'
-        ).get('google', email);
+          'SELECT id FROM calendar_connections WHERE provider = ? AND email = ? AND user_id = ?'
+        ).get('google', email, userId);
 
         if (existing) {
           app.db.prepare(
@@ -1097,16 +1206,8 @@ function buildApp(opts = {}) {
           ).run(encryptedAccess, encryptedRefresh || '', tokenExpiry, 'connected', existing.id);
         } else {
           app.db.prepare(
-            'INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?)'
-          ).run('google', encryptedAccess, encryptedRefresh || '', tokenExpiry, email, 'connected');
-        }
-
-        // Restore session if lost during OAuth redirect
-        if (!request.session.get('adminId')) {
-          const admin = app.db.prepare('SELECT id FROM admin LIMIT 1').get();
-          if (admin) {
-            request.session.set('adminId', admin.id);
-          }
+            'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).run(userId, 'google', encryptedAccess, encryptedRefresh || '', tokenExpiry, email, 'connected');
         }
 
         return reply.redirect('/admin/calendars');
@@ -1182,10 +1283,15 @@ function buildApp(opts = {}) {
 
       const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
 
+      const userId = request.session.get('adminId');
+      if (!userId) {
+        return reply.redirect('/admin/login');
+      }
+
       const msEmail = meData.mail || meData.userPrincipalName;
       const msExisting = app.db.prepare(
-        'SELECT id FROM calendar_connections WHERE provider = ? AND email = ?'
-      ).get('microsoft', msEmail);
+        'SELECT id FROM calendar_connections WHERE provider = ? AND email = ? AND user_id = ?'
+      ).get('microsoft', msEmail, userId);
 
       if (msExisting) {
         app.db.prepare(
@@ -1199,9 +1305,10 @@ function buildApp(opts = {}) {
         );
       } else {
         app.db.prepare(`
-          INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status)
-          VALUES (?, ?, ?, ?, ?, ?)
+          INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(
+          userId,
           'microsoft',
           encrypt(tokenData.access_token, encryptionKey),
           encrypt(tokenData.refresh_token, encryptionKey),
@@ -1209,14 +1316,6 @@ function buildApp(opts = {}) {
           msEmail,
           'connected'
         );
-      }
-
-      // Restore session if lost during OAuth redirect
-      if (!request.session.get('adminId')) {
-        const admin = app.db.prepare('SELECT id FROM admin LIMIT 1').get();
-        if (admin) {
-          request.session.set('adminId', admin.id);
-        }
       }
 
       return reply.redirect('/admin/calendars');
@@ -1277,9 +1376,14 @@ function buildApp(opts = {}) {
       const encryptedAccess = encrypt(tokenData.access_token, encryptionKey);
       const encryptedRefresh = encrypt(tokenData.refresh_token, encryptionKey);
 
+      const userId = request.session.get('adminId');
+      if (!userId) {
+        return reply.redirect('/admin/login');
+      }
+
       const zohoExisting = app.db.prepare(
-        'SELECT id FROM calendar_connections WHERE provider = ? AND email = ?'
-      ).get('zoho', email);
+        'SELECT id FROM calendar_connections WHERE provider = ? AND email = ? AND user_id = ?'
+      ).get('zoho', email, userId);
 
       if (zohoExisting) {
         app.db.prepare(
@@ -1287,16 +1391,8 @@ function buildApp(opts = {}) {
         ).run(encryptedAccess, encryptedRefresh, expiresAt, 'connected', zohoExisting.id);
       } else {
         app.db.prepare(
-          'INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?)'
-        ).run('zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected');
-      }
-
-      // Restore session if lost during OAuth redirect
-      if (!request.session.get('adminId')) {
-        const admin = app.db.prepare('SELECT id FROM admin LIMIT 1').get();
-        if (admin) {
-          request.session.set('adminId', admin.id);
-        }
+          'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(userId, 'zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected');
       }
 
       return reply.redirect('/admin/calendars');
@@ -1304,9 +1400,9 @@ function buildApp(opts = {}) {
 
     app.post('/calendars/:id/disconnect', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { id } = request.params;
-      // Remove legacy references to prevent FOREIGN KEY constraint failures
-      app.db.prepare("UPDATE booking_profiles SET write_calendar_id = NULL WHERE write_calendar_id = ?").run(id);
-      app.db.prepare('DELETE FROM calendar_connections WHERE id = ?').run(id);
+      const adminId = request.session.get('adminId');
+      app.db.prepare("UPDATE booking_profiles SET write_calendar_id = NULL WHERE write_calendar_id = ? AND user_id = ?").run(id, adminId);
+      app.db.prepare('DELETE FROM calendar_connections WHERE id = ? AND user_id = ?').run(id, adminId);
       return reply.redirect('/admin/calendars');
     });
 
