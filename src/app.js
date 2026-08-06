@@ -575,13 +575,29 @@ function buildApp(opts = {}) {
 
             const startTimeStr = formatterTime.format(start);
             const endTimeStr = formatterTime.format(end);
+            const fullDateStr = start.toLocaleDateString('en-GB', { timeZone: adminTz, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
             const cancelBtn = b.status === 'confirmed'
-              ? `<form method="POST" action="/admin/bookings/${b.id}/cancel" style="display:inline; margin:0;" onsubmit="event.preventDefault(); var f=this; AppModal.confirm('Are you sure you want to cancel this meeting?', function(){f.submit()}, {title:'Cancel Meeting', confirmText:'Cancel Meeting', danger:true, icon:'<i class=\\'ph-fill ph-calendar-x\\' style=\\'font-size:32px;color:var(--error)\\'></i>'}); return false;"><input type="hidden" name="_csrf" value="${token}"><button type="submit" class="icon-btn" title="Cancel Meeting"><i class="ph-bold ph-x"></i></button></form>`
+              ? `<form method="POST" action="/admin/bookings/${b.id}/cancel" style="display:inline; margin:0;" onsubmit="event.preventDefault(); event.stopPropagation(); var f=this; AppModal.confirm('Are you sure you want to cancel this meeting?', function(){f.submit()}, {title:'Cancel Meeting', confirmText:'Cancel Meeting', danger:true, icon:'<i class=\\'ph-fill ph-calendar-x\\' style=\\'font-size:32px;color:var(--error)\\'></i>'}); return false;"><input type="hidden" name="_csrf" value="${token}"><button type="submit" class="icon-btn" title="Cancel Meeting" onclick="event.stopPropagation()"><i class="ph-bold ph-x"></i></button></form>`
               : `<span class="badge error">Cancelled</span>`;
 
+            let attendeesArr = [b.booker_email];
+            try { if (b.additional_attendees) attendeesArr.push(...JSON.parse(b.additional_attendees)); } catch {}
+
             rowsHtml += `
-              <div class="meeting-row" data-status="${escapeHtml(b.status)}">
+              <div class="meeting-row meeting-row-clickable" data-status="${escapeHtml(b.status)}"
+                data-meeting-id="${b.id}"
+                data-meeting-title="${escapeHtml(b.title || b.profile_name)}"
+                data-meeting-booker="${escapeHtml(b.booker_name)}"
+                data-meeting-email="${escapeHtml(b.booker_email)}"
+                data-meeting-date="${escapeHtml(fullDateStr)}"
+                data-meeting-time="${startTimeStr} - ${endTimeStr}"
+                data-meeting-duration="${b.duration_minutes}"
+                data-meeting-profile="${escapeHtml(b.profile_name)}"
+                data-meeting-status="${escapeHtml(b.status)}"
+                data-meeting-description="${escapeHtml(b.description || '')}"
+                data-meeting-attendees="${escapeHtml(attendeesArr.join(', '))}"
+>
                 <div class="meeting-time">
                   ${startTimeStr} - ${endTimeStr}
                   <span class="meeting-duration">${b.duration_minutes} min</span>
@@ -593,7 +609,7 @@ function buildApp(opts = {}) {
                   <span class="meeting-profile">${escapeHtml(b.profile_name)}</span>
                 </div>
                 <div class="meeting-actions">
-                  <a href="mailto:${escapeHtml(b.booker_email)}" class="icon-btn" title="Email Booker"><i class="ph-bold ph-envelope-simple"></i></a>
+                  <a href="mailto:${escapeHtml(b.booker_email)}" class="icon-btn" title="Email Booker" onclick="event.stopPropagation()"><i class="ph-bold ph-envelope-simple"></i></a>
                   ${cancelBtn}
                 </div>
               </div>
@@ -720,6 +736,123 @@ function buildApp(opts = {}) {
         </div>
         ${rowsHtml}
         ` : calendarHtml}
+
+        <div class="meeting-detail-overlay" id="meetingDetailOverlay">
+          <div class="meeting-detail-backdrop"></div>
+          <div class="meeting-detail-modal">
+            <div class="meeting-detail-header">
+              <h2 id="meetingDetailTitle"></h2>
+              <button class="meeting-detail-close" id="meetingDetailClose"><i class="ph-bold ph-x"></i></button>
+            </div>
+            <div class="meeting-detail-body">
+              <div class="meeting-detail-status" id="meetingDetailStatus"></div>
+              <div class="meeting-detail-grid">
+                <div class="meeting-detail-item">
+                  <span class="meeting-detail-label"><i class="ph-duotone ph-user"></i> Booked by</span>
+                  <span class="meeting-detail-value" id="meetingDetailBooker"></span>
+                </div>
+                <div class="meeting-detail-item">
+                  <span class="meeting-detail-label"><i class="ph-duotone ph-envelope"></i> Email</span>
+                  <span class="meeting-detail-value" id="meetingDetailEmail"></span>
+                </div>
+                <div class="meeting-detail-item">
+                  <span class="meeting-detail-label"><i class="ph-duotone ph-calendar"></i> Date</span>
+                  <span class="meeting-detail-value" id="meetingDetailDate"></span>
+                </div>
+                <div class="meeting-detail-item">
+                  <span class="meeting-detail-label"><i class="ph-duotone ph-clock"></i> Time</span>
+                  <span class="meeting-detail-value" id="meetingDetailTime"></span>
+                </div>
+                <div class="meeting-detail-item">
+                  <span class="meeting-detail-label"><i class="ph-duotone ph-timer"></i> Duration</span>
+                  <span class="meeting-detail-value" id="meetingDetailDuration"></span>
+                </div>
+                <div class="meeting-detail-item">
+                  <span class="meeting-detail-label"><i class="ph-duotone ph-bookmark"></i> Profile</span>
+                  <span class="meeting-detail-value" id="meetingDetailProfile"></span>
+                </div>
+                <div class="meeting-detail-item" id="meetingDetailAttendeesRow">
+                  <span class="meeting-detail-label"><i class="ph-duotone ph-users"></i> Attendees</span>
+                  <span class="meeting-detail-value" id="meetingDetailAttendees"></span>
+                </div>
+                <div class="meeting-detail-item" id="meetingDetailDescRow" style="display:none;">
+                  <span class="meeting-detail-label"><i class="ph-duotone ph-note"></i> Description</span>
+                  <span class="meeting-detail-value" id="meetingDetailDesc"></span>
+                </div>
+              </div>
+            </div>
+            <div class="meeting-detail-footer" id="meetingDetailFooter">
+              <a href="#" class="meeting-detail-btn secondary" id="meetingDetailEmailBtn"><i class="ph-bold ph-envelope-simple"></i> Send Email</a>
+              <form method="POST" id="meetingDetailCancelForm" style="margin:0;">
+                <input type="hidden" name="_csrf" value="${token}">
+                <button type="submit" class="meeting-detail-btn danger"><i class="ph-bold ph-x-circle"></i> Cancel Meeting</button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <script>
+        (function(){
+          var overlay = document.getElementById('meetingDetailOverlay');
+          var backdrop = overlay.querySelector('.meeting-detail-backdrop');
+          var closeBtn = document.getElementById('meetingDetailClose');
+          var cancelForm = document.getElementById('meetingDetailCancelForm');
+
+          document.querySelectorAll('.meeting-row-clickable').forEach(function(row) {
+            row.addEventListener('click', function() {
+              var d = row.dataset;
+              document.getElementById('meetingDetailTitle').textContent = d.meetingTitle;
+              document.getElementById('meetingDetailBooker').textContent = d.meetingBooker;
+              document.getElementById('meetingDetailEmail').textContent = d.meetingEmail;
+              document.getElementById('meetingDetailDate').textContent = d.meetingDate;
+              document.getElementById('meetingDetailTime').textContent = d.meetingTime;
+              document.getElementById('meetingDetailDuration').textContent = d.meetingDuration + ' minutes';
+              document.getElementById('meetingDetailProfile').textContent = d.meetingProfile;
+              document.getElementById('meetingDetailAttendees').textContent = d.meetingAttendees;
+              document.getElementById('meetingDetailEmailBtn').href = 'mailto:' + d.meetingEmail;
+
+              var descRow = document.getElementById('meetingDetailDescRow');
+              if (d.meetingDescription) {
+                descRow.style.display = '';
+                document.getElementById('meetingDetailDesc').textContent = d.meetingDescription;
+              } else {
+                descRow.style.display = 'none';
+              }
+
+              var statusEl = document.getElementById('meetingDetailStatus');
+              var footer = document.getElementById('meetingDetailFooter');
+              if (d.meetingStatus === 'cancelled') {
+                statusEl.innerHTML = '<span class="badge error">Cancelled</span>';
+                footer.style.display = 'none';
+              } else {
+                statusEl.innerHTML = '<span class="badge success">Confirmed</span>';
+                footer.style.display = '';
+              }
+
+              cancelForm.action = '/admin/bookings/' + d.meetingId + '/cancel';
+              cancelForm.onsubmit = function(e) {
+                e.preventDefault();
+                var f = cancelForm;
+                AppModal.confirm('Are you sure you want to cancel this meeting?', function(){ f.submit(); }, {title:'Cancel Meeting', confirmText:'Cancel Meeting', danger:true, icon:'<i class="ph-fill ph-calendar-x" style="font-size:32px;color:var(--error)"></i>'});
+              };
+
+              overlay.classList.add('active');
+              document.body.style.overflow = 'hidden';
+            });
+          });
+
+          function closeOverlay() {
+            overlay.classList.remove('active');
+            document.body.style.overflow = '';
+          }
+
+          closeBtn.addEventListener('click', closeOverlay);
+          backdrop.addEventListener('click', closeOverlay);
+          document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && overlay.classList.contains('active')) closeOverlay();
+          });
+        })();
+        </script>
       `, true, 'bookings'));
     });
 
@@ -817,6 +950,11 @@ function buildApp(opts = {}) {
     });
 
     app.post('/logout', { preHandler: app.csrfProtection }, async (request, reply) => {
+      await request.session.destroy();
+      return reply.redirect('/admin/login');
+    });
+
+    app.get('/logout', async (request, reply) => {
       await request.session.destroy();
       return reply.redirect('/admin/login');
     });

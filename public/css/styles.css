@@ -3936,6 +3936,131 @@ input[type="radio"] {
   accent-color: var(--primary);
 }
 
+/* ── Schedule Overrides Cards ─────────────────────────── */
+.overrides-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.override-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--neutral-0);
+  border: 1px solid var(--neutral-30);
+  border-radius: 10px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.override-card:hover {
+  border-color: var(--neutral-40);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.override-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.override-card-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.override-card-day {
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--neutral-10);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.override-card-type {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.override-card-type.blocked {
+  color: var(--error);
+}
+.override-card-type.custom {
+  color: var(--primary);
+}
+.override-card-type i {
+  font-size: 14px;
+}
+.override-card-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  color: var(--neutral-60);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 150ms ease;
+  font-size: 14px;
+}
+.override-card-delete:hover {
+  background: var(--error-light);
+  color: var(--error);
+}
+.override-empty-msg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  padding: 16px 0;
+}
+.override-empty-msg i {
+  font-size: 20px;
+}
+.override-add-form {
+  margin-top: 16px;
+  border: 1px solid var(--neutral-30);
+  border-radius: 10px;
+  padding: 16px;
+  background: var(--neutral-5);
+}
+.override-add-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.override-add-btn {
+  margin-top: 12px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: var(--neutral-0);
+  border: 1px solid var(--neutral-30);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.override-add-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-50);
+}
+
 /* Modal Footer */
 .floating-modal-footer {
   padding: 16px 24px;
@@ -4574,6 +4699,166 @@ input[type="radio"] {
 .settings-save-btn:hover {
   background: var(--primary-hover);
   box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+/* ── Meeting Detail Overlay ────────────────────────────── */
+.meeting-row-clickable {
+  cursor: pointer;
+}
+.meeting-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+.meeting-detail-overlay.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+.meeting-detail-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+}
+.meeting-detail-modal {
+  position: relative;
+  background: #ffffff;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 520px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  transform: scale(0.95) translateY(10px);
+  transition: transform 200ms ease;
+}
+.meeting-detail-overlay.active .meeting-detail-modal {
+  transform: scale(1) translateY(0);
+}
+.meeting-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 28px 16px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.meeting-detail-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.meeting-detail-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 150ms ease;
+}
+.meeting-detail-close:hover {
+  background: var(--neutral-10);
+  color: var(--text-primary);
+}
+.meeting-detail-body {
+  padding: 20px 28px;
+  overflow-y: auto;
+  flex: 1;
+}
+.meeting-detail-status {
+  margin-bottom: 16px;
+}
+.meeting-detail-status .badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.meeting-detail-status .badge.success {
+  background: rgba(22, 163, 74, 0.1);
+  color: #16a34a;
+}
+.meeting-detail-status .badge.error {
+  background: rgba(220, 38, 38, 0.1);
+  color: #dc2626;
+}
+.meeting-detail-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.meeting-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.meeting-detail-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.meeting-detail-label i {
+  font-size: 16px;
+}
+.meeting-detail-value {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 500;
+  padding-left: 22px;
+}
+.meeting-detail-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 28px;
+  border-top: 1px solid #f0f0f0;
+}
+.meeting-detail-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  text-decoration: none;
+  transition: all 150ms ease;
+}
+.meeting-detail-btn.secondary {
+  background: var(--neutral-10);
+  color: var(--text-primary);
+}
+.meeting-detail-btn.secondary:hover {
+  background: var(--neutral-20);
+}
+.meeting-detail-btn.danger {
+  background: #dc2626;
+  color: #ffffff;
+}
+.meeting-detail-btn.danger:hover {
+  background: #b91c1c;
 }
 
 /* ── Profile Overlay ───────────────────────────────────── */

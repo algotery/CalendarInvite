@@ -91,65 +91,6 @@ function parseOverridesFromBody(body) {
   return overrides;
 }
 
-function overridesHtml(overrides) {
-  const overrideRows = (overrides || []).map(o => {
-    const isBlocked = o.is_blocked ? 1 : 0;
-    const typeLabel = isBlocked ? 'Blocked' : 'Custom';
-    let rangesDisplay = '';
-    if (!isBlocked && o.custom_ranges) {
-      const ranges = JSON.parse(o.custom_ranges);
-      rangesDisplay = ranges.map(r => `${escapeHtml(r.start)} - ${escapeHtml(r.end)}`).join(', ');
-    }
-
-    return `<tr>
-      <td>
-        ${escapeHtml(o.date)}
-        <input type="hidden" name="override_dates[]" value="${escapeHtml(o.date)}">
-        <input type="hidden" name="override_is_blocked[]" value="${isBlocked}">
-        <input type="hidden" name="override_custom_ranges[]" value="${escapeHtml(o.custom_ranges || '')}">
-      </td>
-      <td>${typeLabel}</td>
-      <td>${rangesDisplay}</td>
-      <td><button type="button" class="danger outline remove-override-btn" style="padding: 4px 8px; font-size: 12px;">Delete</button></td>
-    </tr>`;
-  }).join('');
-
-  return `
-    <fieldset>
-      <legend>Schedule Overrides</legend>
-      <small style="color: var(--text-secondary); display: block; margin-bottom: 1rem;">Add specific dates where you are unavailable or have custom hours.</small>
-      
-      <table id="overrides-table" style="${overrides && overrides.length ? '' : 'display:none;'}">
-        <thead><tr><th>Date</th><th>Type</th><th>Hours</th><th>Actions</th></tr></thead>
-        <tbody id="overrides-tbody">${overrideRows}</tbody>
-      </table>
-      <p id="no-overrides-msg" style="${overrides && overrides.length ? 'display:none;' : ''}">No overrides configured.</p>
-
-      <div style="margin-top: 1rem; border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px;">
-        <h4 style="margin-top: 0; margin-bottom: 1rem;">Add New Override</h4>
-        <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end;">
-          <div style="display: flex; flex-direction: column; margin-bottom: 0;">
-            <label for="new_override_date" style="margin-bottom: 0.25rem; font-size: 0.875rem;">Date</label>
-            <input type="date" id="new_override_date" style="margin-bottom: 0;">
-          </div>
-          <div style="display: flex; flex-direction: column; margin-bottom: 0;">
-            <label for="new_override_type" style="margin-bottom: 0.25rem; font-size: 0.875rem;">Type</label>
-            <select id="new_override_type" style="margin-bottom: 0;">
-              <option value="blocked">Block entire day</option>
-              <option value="custom">Custom hours</option>
-            </select>
-          </div>
-          <div id="new_override_custom" style="display:none; gap: 0.5rem; align-items: center; margin-bottom: 0;">
-            <input type="text" class="time-picker-override" id="new_override_start" value="09:00" style="width: 100px; margin-bottom: 0;">
-            <span style="margin-bottom: 0;">-</span>
-            <input type="text" class="time-picker-override" id="new_override_end" value="17:00" style="width: 100px; margin-bottom: 0;">
-          </div>
-          <button type="button" id="add-override-btn" class="outline" style="margin-bottom: 0; padding-top: 0.5rem; padding-bottom: 0.5rem;">Add Override</button>
-        </div>
-      </div>
-    </fieldset>
-  `;
-}
 
 function profileFormHtml(token, profile, calendars, attendees, schedules, error, overrides, adminTimezone = 'UTC') {
   const isEdit = !!profile;
@@ -237,8 +178,6 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
       </div>
     `;
   }).join('') + `</div><button type="button" class="copy-times-link" id="copy-times-trigger"><i class="ph ph-copy"></i> Copy times to...</button>`;
-
-  const overrideSection = overridesHtml(overrides || []);
 
   // Calculate summaries for accordion sections
   const slugSummary = profile?.slug ? escapeHtml(profile.slug) : 'Not set';
@@ -405,9 +344,8 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <table id="overrides-table" style="${overrides && overrides.length ? '' : 'display:none;'}">
-                <thead><tr><th>Date</th><th>Type</th><th>Hours</th><th>Actions</th></tr></thead>
-                <tbody id="overrides-tbody">${(overrides || []).map(o => {
+              <div class="overrides-list" id="overrides-list" style="${overrides && overrides.length ? '' : 'display:none;'}">
+                ${(overrides || []).map(o => {
                   const isBlocked = o.is_blocked ? 1 : 0;
                   const typeLabel = isBlocked ? 'Blocked' : 'Custom';
                   let rangesDisplay = '';
@@ -415,41 +353,55 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
                     const ranges = JSON.parse(o.custom_ranges);
                     rangesDisplay = ranges.map(r => `${escapeHtml(r.start)} - ${escapeHtml(r.end)}`).join(', ');
                   }
-                  return `<tr>
-                    <td>
-                      ${escapeHtml(o.date)}
-                      <input type="hidden" name="override_dates[]" value="${escapeHtml(o.date)}">
-                      <input type="hidden" name="override_is_blocked[]" value="${isBlocked}">
-                      <input type="hidden" name="override_custom_ranges[]" value="${escapeHtml(o.custom_ranges || '')}">
-                    </td>
-                    <td>${typeLabel}</td>
-                    <td>${rangesDisplay}</td>
-                    <td><button type="button" class="danger outline remove-override-btn" style="padding: 4px 8px; font-size: 12px;">Delete</button></td>
-                  </tr>`;
-                }).join('')}</tbody>
-              </table>
-              <p id="no-overrides-msg" style="${overrides && overrides.length ? 'display:none;' : ''}">No overrides configured.</p>
+                  const dateObj = new Date(o.date + 'T00:00:00');
+                  const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+                  const dateFormatted = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                  return `<div class="override-card">
+                    <input type="hidden" name="override_dates[]" value="${escapeHtml(o.date)}">
+                    <input type="hidden" name="override_is_blocked[]" value="${isBlocked}">
+                    <input type="hidden" name="override_custom_ranges[]" value="${escapeHtml(o.custom_ranges || '')}">
+                    <div class="override-card-info">
+                      <div class="override-card-date">
+                        <span class="override-card-day">${dayName}</span>
+                        <span>${dateFormatted}</span>
+                      </div>
+                      <div class="override-card-type ${isBlocked ? 'blocked' : 'custom'}">
+                        <i class="ph-bold ${isBlocked ? 'ph-prohibit' : 'ph-clock'}"></i>
+                        ${typeLabel}${!isBlocked && rangesDisplay ? ' &middot; ' + rangesDisplay : ''}
+                      </div>
+                    </div>
+                    <button type="button" class="override-card-delete remove-override-btn" title="Remove"><i class="ph-bold ph-trash"></i></button>
+                  </div>`;
+                }).join('')}
+              </div>
+              <p id="no-overrides-msg" class="override-empty-msg" style="${overrides && overrides.length ? 'display:none;' : ''}"><i class="ph-duotone ph-calendar-blank"></i> No overrides configured.</p>
 
-              <div style="margin-top: 1rem; border: 1px solid var(--neutral-30); padding: 16px; border-radius: 8px; background: var(--neutral-10);">
-                <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">
-                  <div style="display: flex; flex-direction: column;">
+              <div class="override-add-form">
+                <div class="override-add-row">
+                  <div class="field-group" style="margin-bottom: 0; flex: 1; min-width: 140px;">
                     <span class="field-label">Date</span>
-                    <input type="date" id="new_override_date" style="margin-bottom: 0; width: auto;">
+                    <input type="date" id="new_override_date" style="margin-bottom: 0;">
                   </div>
-                  <div style="display: flex; flex-direction: column;">
+                  <div class="field-group" style="margin-bottom: 0; flex: 1; min-width: 140px;">
                     <span class="field-label">Type</span>
-                    <select id="new_override_type" style="margin-bottom: 0; width: auto;">
+                    <select id="new_override_type" style="margin-bottom: 0;">
                       <option value="blocked">Block entire day</option>
                       <option value="custom">Custom hours</option>
                     </select>
                   </div>
-                  <div id="new_override_custom" style="display:none; gap: 8px; align-items: center;">
-                    <input type="text" class="time-picker-override" id="new_override_start" value="09:00" style="width: 90px; margin-bottom: 0;">
-                    <span>-</span>
-                    <input type="text" class="time-picker-override" id="new_override_end" value="17:00" style="width: 90px; margin-bottom: 0;">
+                  <div id="new_override_custom" style="display:none; gap: 8px; align-items: flex-end;">
+                    <div class="field-group" style="margin-bottom: 0;">
+                      <span class="field-label">Start</span>
+                      <input type="text" class="time-picker-override" id="new_override_start" value="09:00" style="width: 90px; margin-bottom: 0;">
+                    </div>
+                    <span style="padding-bottom: 8px;">-</span>
+                    <div class="field-group" style="margin-bottom: 0;">
+                      <span class="field-label">End</span>
+                      <input type="text" class="time-picker-override" id="new_override_end" value="17:00" style="width: 90px; margin-bottom: 0;">
+                    </div>
                   </div>
-                  <button type="button" id="add-override-btn" class="outline" style="margin-bottom: 0; padding: 8px 16px; font-size: 0.8125rem;">Add</button>
                 </div>
+                <button type="button" id="add-override-btn" class="override-add-btn"><i class="ph-bold ph-plus"></i> Add Override</button>
               </div>
             </div>
           </div>
@@ -501,11 +453,11 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           document.getElementById('new_override_custom').style.display = e.target.value === 'custom' ? 'flex' : 'none';
         });
 
-        document.getElementById('overrides-tbody').addEventListener('click', (e) => {
-          if (e.target.classList.contains('remove-override-btn')) {
-            e.target.closest('tr').remove();
-            if (document.querySelectorAll('#overrides-tbody tr').length === 0) {
-              document.getElementById('overrides-table').style.display = 'none';
+        document.getElementById('overrides-list').addEventListener('click', (e) => {
+          if (e.target.closest('.remove-override-btn')) {
+            e.target.closest('.override-card').remove();
+            if (document.querySelectorAll('.override-card').length === 0) {
+              document.getElementById('overrides-list').style.display = 'none';
               document.getElementById('no-overrides-msg').style.display = 'block';
             }
           }
@@ -529,24 +481,32 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             rangesDisplay = start + ' - ' + end;
           }
 
-          const tbody = document.getElementById('overrides-tbody');
-          const tr = document.createElement('tr');
-          const typeLabel = isBlocked ? 'Blocked' : 'Custom';
           const escapeHtml = (str) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+          const dateObj = new Date(date + 'T00:00:00');
+          const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+          const dateFormatted = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          const typeLabel = isBlocked ? 'Blocked' : 'Custom';
 
-          tr.innerHTML =
-            '<td>' +
-              escapeHtml(date) +
-              '<input type="hidden" name="override_dates[]" value="' + escapeHtml(date) + '">' +
-              '<input type="hidden" name="override_is_blocked[]" value="' + (isBlocked ? '1' : '0') + '">' +
-              '<input type="hidden" name="override_custom_ranges[]" value="' + escapeHtml(customRangesStr) + '">' +
-            '</td>' +
-            '<td>' + typeLabel + '</td>' +
-            '<td>' + rangesDisplay + '</td>' +
-            '<td><button type="button" class="danger outline remove-override-btn" style="padding: 4px 8px; font-size: 12px;">Delete</button></td>';
-          tbody.appendChild(tr);
+          const card = document.createElement('div');
+          card.className = 'override-card';
+          card.innerHTML =
+            '<input type="hidden" name="override_dates[]" value="' + escapeHtml(date) + '">' +
+            '<input type="hidden" name="override_is_blocked[]" value="' + (isBlocked ? '1' : '0') + '">' +
+            '<input type="hidden" name="override_custom_ranges[]" value="' + escapeHtml(customRangesStr) + '">' +
+            '<div class="override-card-info">' +
+              '<div class="override-card-date">' +
+                '<span class="override-card-day">' + dayName + '</span>' +
+                '<span>' + dateFormatted + '</span>' +
+              '</div>' +
+              '<div class="override-card-type ' + (isBlocked ? 'blocked' : 'custom') + '">' +
+                '<i class="ph-bold ' + (isBlocked ? 'ph-prohibit' : 'ph-clock') + '"></i> ' +
+                typeLabel + (!isBlocked && rangesDisplay ? ' &middot; ' + rangesDisplay : '') +
+              '</div>' +
+            '</div>' +
+            '<button type="button" class="override-card-delete remove-override-btn" title="Remove"><i class="ph-bold ph-trash"></i></button>';
 
-          document.getElementById('overrides-table').style.display = '';
+          document.getElementById('overrides-list').appendChild(card);
+          document.getElementById('overrides-list').style.display = '';
           document.getElementById('no-overrides-msg').style.display = 'none';
           document.getElementById('new_override_date').value = '';
         });
