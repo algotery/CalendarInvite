@@ -1176,7 +1176,7 @@ function buildApp(opts = {}) {
 
     app.get('/settings', async (request, reply) => {
       const adminId = request.session.get('adminId');
-      const admin = app.db.prepare('SELECT timezone FROM admin WHERE id = ?').get(adminId);
+      const admin = app.db.prepare('SELECT timezone, notification_email FROM admin WHERE id = ?').get(adminId);
       const token = reply.generateCsrf();
       const flash = request.session.get('flash') || '';
       request.session.set('flash', '');
@@ -1235,6 +1235,24 @@ function buildApp(opts = {}) {
                 <button type="submit" class="settings-save-btn">Change Password</button>
               </form>
             </div>
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div class="settings-card-icon"><i class="ph-duotone ph-envelope"></i></div>
+                <div>
+                  <h2>Notification Email</h2>
+                  <p>Receive email notifications when someone books a meeting.</p>
+                </div>
+              </div>
+              <form method="POST" action="/admin/settings/notification-email" class="settings-form">
+                <input type="hidden" name="_csrf" value="${token}">
+                <div class="field-group">
+                  <label class="field-label">Email address</label>
+                  <input type="email" name="notification_email" class="settings-input" placeholder="your@email.com" value="${escapeHtml(admin.notification_email || '')}">
+                </div>
+                <p style="margin: 0 0 16px; color: #6b6b6b; font-size: 13px;">Leave empty to disable email notifications.</p>
+                <button type="submit" class="settings-save-btn">Save Email</button>
+              </form>
+            </div>
           </div>
         </div>
       `, true, 'settings'));
@@ -1273,6 +1291,21 @@ function buildApp(opts = {}) {
       const newHash = await bcrypt.hash(new_password, 10);
       app.db.prepare('UPDATE admin SET password_hash = ? WHERE id = ?').run(newHash, adminId);
       request.session.set('flash', 'Password changed successfully');
+      return reply.redirect('/admin/settings');
+    });
+
+    app.post('/settings/notification-email', { preHandler: app.csrfProtection }, async (request, reply) => {
+      const { notification_email } = request.body || {};
+      const adminId = request.session.get('adminId');
+      const email = (notification_email || '').trim();
+
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        request.session.set('flash', 'Invalid email address');
+        return reply.redirect('/admin/settings');
+      }
+
+      app.db.prepare('UPDATE admin SET notification_email = ? WHERE id = ?').run(email, adminId);
+      request.session.set('flash', email ? 'Notification email saved' : 'Notification email removed');
       return reply.redirect('/admin/settings');
     });
   }, { prefix: '/admin' });

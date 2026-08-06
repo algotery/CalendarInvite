@@ -4,6 +4,7 @@ const { refreshAccessToken: refreshGoogleToken } = require('./google');
 const { createMicrosoftClient } = require('./microsoft');
 const { getZohoClient } = require('./zoho');
 const { optimizedCleanupOldRateLimits } = require('./performance-fixes');
+const { sendNewBookingNotification, sendBookingCancelledNotification } = require('./mailer');
 
 async function getValidTokenForConnection(db, encryptionKey, connection) {
   const expiry = new Date(connection.token_expiry || 0);
@@ -1209,6 +1210,20 @@ function registerBookingSubmitApi(app, { encryptionKey }) {
 
     recordEmailBooking(app.db, email.trim(), request.url);
 
+    // Send notification email to admin
+    const admin = app.db.prepare("SELECT notification_email FROM admin LIMIT 1").get();
+    if (admin && admin.notification_email) {
+      const baseUrl = `${request.protocol}://${request.hostname}${request.port && request.port !== 80 && request.port !== 443 ? ':' + request.port : ''}`;
+      const cancelUrl = `${baseUrl}/cancel/${cancellationToken}`;
+      sendNewBookingNotification(admin.notification_email, {
+        title: bookingTitle,
+        booker_name: name.trim(),
+        booker_email: email.trim(),
+        start_time: startDate.toISOString(),
+        duration_minutes: durationMinutes,
+      }, profile.name, cancelUrl).catch(() => {});
+    }
+
     return {
       booking: {
         title: bookingTitle,
@@ -1358,7 +1373,17 @@ function registerCancellationApi(app, { encryptionKey }) {
     // Mark as cancelled in DB
     app.db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(booking.id);
 
-    return { message: 'Booking successfully cancelled' };
+    // Send cancellation email to booker
+    if (booking.booker_email) {
+      const profile = app.db.prepare("SELECT name FROM booking_profiles WHERE id = ?").get(booking.profile_id);
+      sendBookingCancelledNotification(booking.booker_email, {
+        title: booking.title,
+        start_time: booking.start_time,
+        duration_minutes: booking.duration_minutes,
+      }, profile ? profile.name : 'Unknown').catch(() => {});
+    }
+
+    return reply.redirect(`/cancel/${token}`);
   });
 }
 

@@ -128,6 +128,12 @@ function createDatabase(dbPath) {
     db.exec('ALTER TABLE booking_profiles ADD COLUMN buffer_time_minutes INTEGER NOT NULL DEFAULT 0');
   }
 
+  // Migration: add notification_email to admin table
+  const adminCols = db.pragma('table_info(admin)');
+  if (!adminCols.some(c => c.name === 'notification_email')) {
+    db.exec("ALTER TABLE admin ADD COLUMN notification_email TEXT DEFAULT ''");
+  }
+
   return db;
 }
 

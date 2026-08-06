@@ -19,7 +19,8 @@
     "bcrypt": "^6.0.0",
     "better-sqlite3": "^11.0.0",
     "dotenv": "^16.4.0",
-    "fastify": "^5.0.0"
+    "fastify": "^5.0.0",
+    "nodemailer": "^9.0.4"
   },
   "engines": {
     "node": ">=20.0.0"
