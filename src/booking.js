@@ -271,6 +271,8 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
     const meetingTool = profile.meeting_tool === 'meet' ? 'Google Meet' : profile.meeting_tool === 'teams' ? 'Microsoft Teams' : 'Phone call';
     const meetingIcon = profile.meeting_tool === 'meet' ? 'ph-video-camera' : profile.meeting_tool === 'teams' ? 'ph-video-camera' : 'ph-phone';
 
+    const availableDays = app.db.prepare("SELECT DISTINCT day_of_week FROM schedule_templates WHERE profile_id = ?").all(profile.id).map(r => r.day_of_week);
+
     reply.type('text/html').send(baseLayout(`Book - ${escapeHtml(profile.name)}`, `
       <div class="booking-page-container">
         <!-- Step Indicator -->
@@ -291,7 +293,6 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
             </button>
 
             <div class="booking-profile-info">
-              <div class="booking-profile-name">${escapeHtml(profile.name)}</div>
               <h1 class="booking-profile-title">${escapeHtml(profile.name)}</h1>
 
               <div class="booking-profile-meta">
@@ -397,6 +398,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
         (function() {
           const slug = '${escapeHtml(slug)}';
           const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const availableDays = ${JSON.stringify(availableDays)};
           var selectedDuration = 30;
           let selectedSlotStart = null;
           let selectedDateStr = null;
@@ -556,7 +558,14 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               var dayNum = parseInt(btn.textContent.trim());
               var dateStr = formatDateToYYYYMMDD(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), dayNum));
               var level = busynessData[dateStr];
-              if (level && level !== 'none') {
+              if (level === 'full') {
+                var isToday = btn.classList.contains('calendar-day-today');
+                btn.classList.add('calendar-day-disabled');
+                btn.disabled = true;
+                if (isToday) {
+                  btn.classList.add('calendar-day-today');
+                }
+              } else if (level && level !== 'none') {
                 btn.classList.add('busyness-' + level);
               }
             });
@@ -617,14 +626,17 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               var isPast = d < today;
               var isFuture = d > horizon;
               var isToday = d.getTime() === today.getTime();
+              var dayOfWeek = d.getDay();
+              var isUnavailable = availableDays.length > 0 && availableDays.indexOf(dayOfWeek) === -1;
 
-              if (isPast || isFuture) {
-                btn.className += ' calendar-day-disabled';
+              if (isToday) {
+                btn.classList.add('calendar-day-today');
+              }
+
+              if (isPast || isFuture || isUnavailable) {
+                btn.classList.add('calendar-day-disabled');
                 btn.disabled = true;
               } else {
-                if (isToday) {
-                  btn.className += ' calendar-day-today';
-                }
                 (function(ds) {
                   btn.addEventListener('click', function() { selectDate(ds); });
                 })(dateStr);

@@ -1835,12 +1835,30 @@ input[type="radio"] {
 }
 
 .calendar-day-today {
-  border-color: var(--primary);
-  border-width: 2px;
-  font-weight: 600;
-  color: var(--primary);
-  background: var(--primary-50);
-  box-shadow: 0 0 0 3px var(--primary-glow);
+  border-color: var(--primary) !important;
+  border-width: 2px !important;
+  font-weight: 600 !important;
+  color: var(--primary) !important;
+  background: var(--primary-50) !important;
+  box-shadow: 0 0 0 3px var(--primary-glow) !important;
+  opacity: 1 !important;
+}
+
+.calendar-day-today.calendar-day-disabled {
+  cursor: not-allowed;
+  position: relative;
+}
+
+.calendar-day-today.calendar-day-disabled::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
 }
 
 .calendar-day.calendar-day-selected {
