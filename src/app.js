@@ -12,261 +12,19 @@ const { buildGoogleAuthUrl, exchangeCodeForTokens, getGoogleUserEmail } = requir
 const { encrypt, decrypt } = require('./encryption');
 const { registerProfileRoutes } = require('./profiles');
 const { registerBookingRoutes, registerSlotsApi, registerBusynessApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook } = require('./booking');
-const { addPerformanceIndexes, getBatchedBookings } = require('./performance-fixes');
+const { getBatchedBookings } = require('./performance-fixes');
+const { requireAuth } = require('./middleware/auth');
+const { registerHealthRoutes } = require('./routes/health');
+const { BASE_LAYOUT, escapeHtml, TIMEZONES } = require('./views/layout');
 
 
-const TIMEZONES = [
-  'UTC',
-  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-  'America/Anchorage', 'America/Toronto', 'America/Vancouver', 'America/Sao_Paulo',
-  'America/Mexico_City', 'America/Argentina/Buenos_Aires',
-  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Amsterdam',
-  'Europe/Madrid', 'Europe/Rome', 'Europe/Zurich', 'Europe/Moscow',
-  'Europe/Istanbul', 'Europe/Warsaw', 'Europe/Athens',
-  'Asia/Dubai', 'Asia/Kolkata', 'Asia/Shanghai',
-  'Asia/Tokyo', 'Asia/Seoul', 'Asia/Singapore', 'Asia/Hong_Kong',
-  'Australia/Sydney', 'Australia/Melbourne', 'Pacific/Auckland',
-  'Africa/Cairo', 'Africa/Johannesburg', 'Africa/Lagos',
-];
 
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
-const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage = false) => {
-  const bodyClass = isBookingPage ? ' class="booking-page"' : '';
-  const content = isAdmin ? `
-<div class="app-layout">
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <i class="ph-fill ph-calendar-blank"></i>
-      CalendarInvite
-    </div>
-    <div class="sidebar-create">
-      <a href="/admin/profiles/new" class="profile-overlay-trigger" data-url="/admin/profiles/new?partial=1"><i class="ph ph-plus"></i> Create</a>
-    </div>
-    <nav class="sidebar-nav">
-      <a href="/admin/dashboard" class="${activeNav === 'dashboard' ? 'nav-active' : ''}"><i class="ph-fill ph-squares-four"></i> Dashboard</a>
-      <a href="/admin/bookings" class="${activeNav === 'bookings' ? 'nav-active' : ''}"><i class="ph-fill ph-calendar-check"></i> Meetings</a>
-      <a href="/admin/profiles" class="${activeNav === 'profiles' ? 'nav-active' : ''}"><i class="ph-fill ph-user"></i> Profiles</a>
-      <a href="/admin/calendars" class="${activeNav === 'calendars' ? 'nav-active' : ''}"><i class="ph-fill ph-calendar-plus"></i> Calendars</a>
-      <a href="/admin/settings" class="${activeNav === 'settings' ? 'nav-active' : ''}"><i class="ph-fill ph-gear"></i> Settings</a>
-    </nav>
-    <div class="sidebar-footer">
-      <a href="#" onclick="event.preventDefault(); AppModal.confirm('Are you sure you want to logout?', function(){ window.location.href='/admin/logout'; }, {title:'Logout', confirmText:'Logout', icon:'<i class=\\'ph-fill ph-sign-out\\' style=\\'font-size:32px;color:var(--primary)\\'></i>'});"><i class="ph-fill ph-sign-out"></i> Logout</a>
-    </div>
-  </aside>
-  <main class="main-content">
-    <div class="content-wrapper">
-      ${body}
-    </div>
-  </main>
-</div>
-` : `
-  <main class="container">
-    ${body}
-  </main>
-`;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${title} - CalendarInvite</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="/css/styles.css">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" media="print" onload="this.media='all'">
-  <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css" media="print" onload="this.media='all'">
-  <script src="https://unpkg.com/@phosphor-icons/web"></script>
-</head>
-<body${bodyClass}>
-  ${content}
-  ${isAdmin ? `<div id="profile-overlay" class="profile-overlay" style="display:none">
-    <div class="profile-overlay-backdrop"></div>
-    <div class="profile-overlay-panel">
-      <div class="profile-overlay-content" id="profile-overlay-content"></div>
-    </div>
-  </div>` : ''}
-  <div id="app-modal-overlay" class="app-modal-overlay" style="display:none">
-    <div class="app-modal">
-      <div class="app-modal-icon" id="app-modal-icon"></div>
-      <div class="app-modal-title" id="app-modal-title"></div>
-      <div class="app-modal-message" id="app-modal-message"></div>
-      <div class="app-modal-actions" id="app-modal-actions"></div>
-    </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      if (typeof flatpickr !== 'undefined') {
-        window.initTimePickers = function() {
-          flatpickr(".time-picker:not(.flatpickr-input)", {
-            enableTime: true,
-            noCalendar: true,
-            dateFormat: "H:i",
-            altInput: true,
-            altFormat: "h:i K",
-            minuteIncrement: 1
-          });
-        };
-        window.initTimePickers();
-      }
-    });
-
-    window.AppModal = {
-      show: function(opts) {
-        var overlay = document.getElementById('app-modal-overlay');
-        var icon = document.getElementById('app-modal-icon');
-        var title = document.getElementById('app-modal-title');
-        var message = document.getElementById('app-modal-message');
-        var actions = document.getElementById('app-modal-actions');
-
-        icon.innerHTML = opts.icon || '<i class="ph-fill ph-warning" style="font-size:32px;color:var(--warning)"></i>';
-        title.textContent = opts.title || '';
-        message.textContent = opts.message || '';
-        actions.innerHTML = '';
-
-        var cancelBtn = document.createElement('button');
-        cancelBtn.className = 'app-modal-btn app-modal-btn-cancel';
-        cancelBtn.textContent = opts.cancelText || 'Cancel';
-        cancelBtn.onclick = function() { AppModal.hide(); if (opts.onCancel) opts.onCancel(); };
-        actions.appendChild(cancelBtn);
-
-        if (opts.onConfirm) {
-          var confirmBtn = document.createElement('button');
-          confirmBtn.className = 'app-modal-btn app-modal-btn-confirm' + (opts.danger ? ' danger' : '');
-          confirmBtn.textContent = opts.confirmText || 'Confirm';
-          confirmBtn.onclick = function() { AppModal.hide(); opts.onConfirm(); };
-          actions.appendChild(confirmBtn);
-        } else {
-          cancelBtn.textContent = opts.cancelText || 'OK';
-        }
-
-        overlay.style.display = 'flex';
-        (opts.onConfirm ? actions.querySelector('.app-modal-btn-confirm') : cancelBtn).focus();
-      },
-      hide: function() {
-        document.getElementById('app-modal-overlay').style.display = 'none';
-      },
-      confirm: function(message, callback, opts) {
-        opts = opts || {};
-        AppModal.show({
-          icon: opts.icon || '<i class="ph-fill ph-warning" style="font-size:32px;color:var(--warning)"></i>',
-          title: opts.title || 'Confirm',
-          message: message,
-          confirmText: opts.confirmText || 'Confirm',
-          cancelText: opts.cancelText || 'Cancel',
-          danger: opts.danger || false,
-          onConfirm: callback
-        });
-      },
-      alert: function(message, opts) {
-        opts = opts || {};
-        AppModal.show({
-          icon: opts.icon || '<i class="ph-fill ph-info" style="font-size:32px;color:var(--primary)"></i>',
-          title: opts.title || 'Notice',
-          message: message,
-          cancelText: 'OK'
-        });
-      }
-    };
-
-    document.getElementById('app-modal-overlay').addEventListener('click', function(e) {
-      if (e.target === this) AppModal.hide();
-    });
-
-    // Profile overlay (global — works from any page)
-    (function() {
-      var overlay = document.getElementById('profile-overlay');
-      if (!overlay) return;
-      var content = document.getElementById('profile-overlay-content');
-
-      function openOverlay(url) {
-        overlay.style.display = 'flex';
-        content.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:64px;"><i class="ph-bold ph-spinner loading" style="font-size:24px;opacity:0.5;"></i></div>';
-        document.body.style.overflow = 'hidden';
-        fetch(url)
-          .then(function(res) { return res.text(); })
-          .then(function(html) {
-            content.innerHTML = html;
-            content.querySelectorAll('script').forEach(function(oldScript) {
-              var newScript = document.createElement('script');
-              newScript.textContent = oldScript.textContent;
-              oldScript.parentNode.replaceChild(newScript, oldScript);
-            });
-            if (window.initTimePickers) window.initTimePickers();
-          });
-      }
-
-      function closeOverlay() {
-        overlay.style.display = 'none';
-        content.innerHTML = '';
-        document.body.style.overflow = '';
-      }
-
-      document.addEventListener('click', function(e) {
-        var trigger = e.target.closest('.profile-overlay-trigger');
-        if (trigger) {
-          e.preventDefault();
-          document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.style.display = 'none'; });
-          openOverlay(trigger.dataset.url || trigger.getAttribute('href') + '?partial=1');
-        }
-      });
-
-      overlay.querySelector('.profile-overlay-backdrop').addEventListener('click', closeOverlay);
-
-      document.addEventListener('click', function(e) {
-        if (e.target.closest('#profile-overlay') && e.target.closest('a[href="/admin/profiles"]')) {
-          e.preventDefault();
-          closeOverlay();
-        }
-      });
-
-      document.addEventListener('submit', function(e) {
-        var form = e.target;
-        if (!form.closest('#profile-overlay')) return;
-        if (form.id === 'delete-profile-form') return;
-        e.preventDefault();
-        var formData = new FormData(form);
-        fetch(form.action + (form.action.includes('?') ? '&' : '?') + 'partial=1', {
-          method: 'POST',
-          body: new URLSearchParams(formData),
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          redirect: 'manual'
-        }).then(function(res) {
-          if (res.status === 0 || res.type === 'opaqueredirect' || res.status === 302 || res.status === 303) {
-            closeOverlay();
-            window.location.reload();
-          } else {
-            return res.text();
-          }
-        }).then(function(html) {
-          if (html) {
-            content.innerHTML = html;
-            content.querySelectorAll('script').forEach(function(oldScript) {
-              var newScript = document.createElement('script');
-              newScript.textContent = oldScript.textContent;
-              oldScript.parentNode.replaceChild(newScript, oldScript);
-            });
-            if (window.initTimePickers) window.initTimePickers();
-          }
-        });
-      });
-
-      window.ProfileOverlay = { open: openOverlay, close: closeOverlay };
-    })();
-  </script>
-</body>
-</html>`;
-};
-
-function buildApp(opts = {}) {
+async function buildApp(opts = {}) {
   const app = fastify({ logger: opts.logger || false });
 
-  const db = createDatabase(opts.dbPath || process.env.DB_PATH || './data/calendar-invite.db');
+  const connectionString = opts.connectionString || process.env.DATABASE_URL;
+  const db = await createDatabase(connectionString);
   const encryptionKey = opts.encryptionKey || process.env.TOKEN_ENCRYPTION_KEY;
   const googleClientId = opts.googleClientId || process.env.GOOGLE_CLIENT_ID;
   const googleClientSecret = opts.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET;
@@ -278,9 +36,6 @@ function buildApp(opts = {}) {
   app.decorate('db', db);
   app.decorate('fetchFn', opts.fetchFn || globalThis.fetch);
   app.decorate('zohoFetch', null);
-
-  // Add performance indexes
-  addPerformanceIndexes(db);
 
   app.register(fastifyStatic, {
     root: path.join(__dirname, '..', 'public'),
@@ -303,11 +58,13 @@ function buildApp(opts = {}) {
   });
   app.register(csrf, { sessionPlugin: '@fastify/session' });
 
+  registerHealthRoutes(app);
+
   app.get('/', async (request, reply) => {
     reply.type('text/html').send(BASE_LAYOUT('Home', `
       <div style="text-align: center; padding: 4rem 0;">
-        <i class="ph-duotone ph-calendar-blank" style="font-size: 4rem; color: var(--primary); margin-bottom: 1rem;"></i>
-        <h1 style="font-size: 3rem; margin-bottom: 2rem;">CalendarInvite</h1>
+        <img src="/img/icon.svg" alt="" style="height: 64px; margin-bottom: 1rem;">
+        <h1 style="font-size: 3rem; margin-bottom: 2rem;"><img src="/img/wordmark.svg" alt="Logo" style="height: 36px;"></h1>
         <a href="/admin/login" role="button" style="padding: 12px 32px; font-size: 1rem;">Admin Login →</a>
       </div>
     `));
@@ -326,8 +83,8 @@ function buildApp(opts = {}) {
       reply.type('text/html').send(BASE_LAYOUT('Login', `
         <div class="login-card">
           <article>
-            <div class="login-logo"><i class="ph-duotone ph-calendar-blank" style="font-size: 3rem; color: var(--primary);"></i></div>
-            <div class="login-title">CalendarInvite</div>
+            <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
+            <div class="login-title"><img src="/img/wordmark.svg" alt="Logo" style="height: 24px;"></div>
             <div class="login-subtitle">Welcome back! Sign in to your account.</div>
             <form method="POST" action="/admin/login">
               <input type="hidden" name="_csrf" value="${token}">
@@ -352,14 +109,14 @@ function buildApp(opts = {}) {
     app.post('/login', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { email, password } = request.body || {};
 
-      const admin = app.db.prepare('SELECT * FROM admin WHERE email = ?').get(email);
+      const admin = await app.db.getOne('SELECT * FROM admin WHERE email = $1', [email]);
       if (!admin || !(await bcrypt.compare(password || '', admin.password_hash))) {
         const token = reply.generateCsrf();
         return reply.type('text/html').send(BASE_LAYOUT('Login', `
           <div class="login-card">
             <article>
-              <div class="login-logo"><i class="ph-duotone ph-calendar-blank" style="font-size: 3rem; color: var(--primary);"></i></div>
-              <div class="login-title">CalendarInvite</div>
+              <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
+              <div class="login-title"><img src="/img/wordmark.svg" alt="Logo" style="height: 24px;"></div>
               <div class="login-subtitle">Welcome back! Sign in to your account.</div>
               <div role="alert" class="error">
                 Invalid email or password. Please try again.
@@ -393,8 +150,8 @@ function buildApp(opts = {}) {
       reply.type('text/html').send(BASE_LAYOUT('Register', `
         <div class="login-card">
           <article>
-            <div class="login-logo"><i class="ph-duotone ph-calendar-blank" style="font-size: 3rem; color: var(--primary);"></i></div>
-            <div class="login-title">CalendarInvite</div>
+            <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
+            <div class="login-title"><img src="/img/wordmark.svg" alt="Logo" style="height: 24px;"></div>
             <div class="login-subtitle">Create your account to get started.</div>
             <form method="POST" action="/admin/register">
               <input type="hidden" name="_csrf" value="${token}">
@@ -431,8 +188,8 @@ function buildApp(opts = {}) {
       const renderError = (msg) => reply.type('text/html').send(BASE_LAYOUT('Register', `
         <div class="login-card">
           <article>
-            <div class="login-logo"><i class="ph-duotone ph-calendar-blank" style="font-size: 3rem; color: var(--primary);"></i></div>
-            <div class="login-title">CalendarInvite</div>
+            <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
+            <div class="login-title"><img src="/img/wordmark.svg" alt="Logo" style="height: 24px;"></div>
             <div class="login-subtitle">Create your account to get started.</div>
             <div role="alert" class="error">${escapeHtml(msg)}</div>
             <form method="POST" action="/admin/register">
@@ -467,48 +224,35 @@ function buildApp(opts = {}) {
       if (password.length < 6) return renderError('Password must be at least 6 characters.');
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return renderError('Invalid email address.');
 
-      const existingEmail = app.db.prepare('SELECT id FROM admin WHERE email = ?').get(email);
+      const existingEmail = await app.db.getOne('SELECT id FROM admin WHERE email = $1', [email]);
       if (existingEmail) return renderError('An account with this email already exists.');
 
-      const existingUsername = app.db.prepare('SELECT id FROM admin WHERE username = ?').get(username);
+      const existingUsername = await app.db.getOne('SELECT id FROM admin WHERE username = $1', [username]);
       if (existingUsername) return renderError('This username is already taken.');
 
       const passwordHash = await bcrypt.hash(password, 10);
-      const result = app.db.prepare('INSERT INTO admin (email, username, password_hash, timezone, notification_email) VALUES (?, ?, ?, ?, ?)').run(email, username.trim(), passwordHash, 'UTC', email);
+      const result = await app.db.query('INSERT INTO admin (email, username, password_hash, timezone, notification_email) VALUES ($1, $2, $3, $4, $5) RETURNING id', [email, username.trim(), passwordHash, 'UTC', email]);
 
-      request.session.set('adminId', result.lastInsertRowid);
+      request.session.set('adminId', result.rows[0].id);
       return reply.redirect('/admin/dashboard');
     });
 
-    app.addHook('preHandler', async (request, reply) => {
-      // Skip auth for login, register, and OAuth callback routes
-      const publicPaths = [
-        '/admin/login',
-        '/admin/register',
-        '/admin/calendars/callback/google',
-        '/admin/calendars/callback/microsoft',
-        '/admin/calendars/zoho/callback',
-      ];
-      const urlPath = request.url.split('?')[0];
-      if (publicPaths.includes(urlPath)) return;
-      if (!request.session.get('adminId')) {
-        return reply.redirect('/admin/login');
-      }
-    });
+    app.addHook('preHandler', requireAuth);
 
 
     app.get('/dashboard', async (request, reply) => {
       const token = reply.generateCsrf();
       const adminId = request.session.get('adminId');
-      const admin = app.db.prepare('SELECT timezone FROM admin WHERE id = ?').get(adminId);
+      const admin = await app.db.getOne('SELECT timezone FROM admin WHERE id = $1', [adminId]);
       const adminTz = admin ? admin.timezone : 'UTC';
 
-      const activeProfiles = app.db.prepare("SELECT COUNT(*) as count FROM booking_profiles WHERE is_active = 1 AND user_id = ?").get(adminId).count;
+      const activeProfiles = await app.db.getOne("SELECT COUNT(*) as count FROM booking_profiles WHERE is_active = true AND user_id = $1", [adminId]);
       const now = new Date().toISOString();
-      const upcomingCount = app.db.prepare("SELECT COUNT(*) as count FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > ? AND bp.user_id = ?").get(now, adminId).count;
-      const next5 = app.db.prepare(
-        "SELECT b.*, bp.name as profile_name FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > ? AND bp.user_id = ? ORDER BY b.start_time ASC LIMIT 5"
-      ).all(now, adminId);
+      const upcomingCount = await app.db.getOne("SELECT COUNT(*) as count FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > $1 AND bp.user_id = $2", [now, adminId]);
+      const next5 = await app.db.getAll(
+        "SELECT b.*, bp.name as profile_name FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > $1 AND bp.user_id = $2 ORDER BY b.start_time ASC LIMIT 5",
+        [now, adminId]
+      );
 
       const next5Cards = next5.map(b => {
         const start = new Date(b.start_time);
@@ -536,14 +280,14 @@ function buildApp(opts = {}) {
             <div class="dashboard-stat-card">
               <div class="dashboard-stat-icon"><i class="ph-duotone ph-users"></i></div>
               <div class="dashboard-stat-content">
-                <span class="dashboard-stat-value">${activeProfiles}</span>
+                <span class="dashboard-stat-value">${activeProfiles.count}</span>
                 <span class="dashboard-stat-label">Active Profiles</span>
               </div>
             </div>
             <div class="dashboard-stat-card">
               <div class="dashboard-stat-icon"><i class="ph-duotone ph-calendar-check"></i></div>
               <div class="dashboard-stat-content">
-                <span class="dashboard-stat-value">${upcomingCount}</span>
+                <span class="dashboard-stat-value">${upcomingCount.count}</span>
                 <span class="dashboard-stat-label">Upcoming Bookings</span>
               </div>
             </div>
@@ -578,7 +322,7 @@ function buildApp(opts = {}) {
     app.get('/bookings', async (request, reply) => {
       const token = reply.generateCsrf();
       const adminId = request.session.get('adminId');
-      const admin = app.db.prepare('SELECT timezone FROM admin WHERE id = ?').get(adminId);
+      const admin = await app.db.getOne('SELECT timezone FROM admin WHERE id = $1', [adminId]);
       const adminTz = admin ? admin.timezone : 'UTC';
 
       const { status, profile_id, filter, view } = request.query;
@@ -624,7 +368,7 @@ function buildApp(opts = {}) {
         timeMax = thisMonday.toISOString();
       }
 
-      const bookings = getBatchedBookings(app.db, adminTz, {
+      const bookings = await getBatchedBookings(app.db, adminTz, {
         user_id: adminId,
         status,
         profile_id,
@@ -749,7 +493,7 @@ function buildApp(opts = {}) {
         const monthEnd = new Date(calYear, calMonth, 0);
         const monthName = monthStart.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 
-        const allBookings = getBatchedBookings(app.db, adminTz, {
+        const allBookings = await getBatchedBookings(app.db, adminTz, {
           user_id: adminId,
           status: 'confirmed',
           timeMin: new Date(calYear, calMonth - 1, 1).toISOString(),
@@ -961,7 +705,7 @@ function buildApp(opts = {}) {
     app.post('/bookings/:id/cancel', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { id } = request.params;
       const adminId = request.session.get('adminId');
-      const booking = app.db.prepare("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.id = ? AND bp.user_id = ?").get(id, adminId);
+      const booking = await app.db.getOne("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.id = $1 AND bp.user_id = $2", [id, adminId]);
 
       if (!booking) {
         return reply.code(404).type('text/html').send(BASE_LAYOUT('Not Found', '<h1>Booking not found</h1>'));
@@ -992,25 +736,25 @@ function buildApp(opts = {}) {
         try {
           const events = JSON.parse(booking.calendar_event_id);
           for (const ev of events) {
-            const connection = app.db.prepare("SELECT * FROM calendar_connections WHERE id = ? AND status = 'connected'").get(ev.connectionId);
+            const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [ev.connectionId]);
             if (connection) await deleteEv(connection, ev.eventId);
           }
         } catch (err) {
           if (booking.write_calendar_id) {
-            const connection = app.db.prepare("SELECT * FROM calendar_connections WHERE id = ? AND status = 'connected'").get(booking.write_calendar_id);
+            const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [booking.write_calendar_id]);
             if (connection) await deleteEv(connection, booking.calendar_event_id);
           }
         }
       }
 
-      app.db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(id);
+      await app.db.run("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [id]);
       return reply.redirect('/admin/bookings');
     });
 
     app.post('/bookings/:id/delete', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { id } = request.params;
       const adminId = request.session.get('adminId');
-      const booking = app.db.prepare("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.id = ? AND bp.user_id = ?").get(id, adminId);
+      const booking = await app.db.getOne("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.id = $1 AND bp.user_id = $2", [id, adminId]);
 
       if (!booking) {
         return reply.code(404).type('text/html').send(BASE_LAYOUT('Not Found', '<h1>Booking not found</h1>'));
@@ -1038,18 +782,18 @@ function buildApp(opts = {}) {
         try {
           const events = JSON.parse(booking.calendar_event_id);
           for (const ev of events) {
-            const connection = app.db.prepare("SELECT * FROM calendar_connections WHERE id = ? AND status = 'connected'").get(ev.connectionId);
+            const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [ev.connectionId]);
             if (connection) await deleteEv(connection, ev.eventId);
           }
         } catch (err) {
           if (booking.write_calendar_id) {
-            const connection = app.db.prepare("SELECT * FROM calendar_connections WHERE id = ? AND status = 'connected'").get(booking.write_calendar_id);
+            const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [booking.write_calendar_id]);
             if (connection) await deleteEv(connection, booking.calendar_event_id);
           }
         }
       }
 
-      app.db.prepare("DELETE FROM bookings WHERE id = ?").run(id);
+      await app.db.run("DELETE FROM bookings WHERE id = $1", [id]);
       return reply.redirect('/admin/bookings');
     });
 
@@ -1065,7 +809,7 @@ function buildApp(opts = {}) {
 
     app.get('/calendars', async (request, reply) => {
       const adminId = request.session.get('adminId');
-      const connections = app.db.prepare('SELECT * FROM calendar_connections WHERE user_id = ?').all(adminId);
+      const connections = await app.db.getAll('SELECT * FROM calendar_connections WHERE user_id = $1', [adminId]);
       const token = reply.generateCsrf();
       const icons = {
         google: `<svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>`,
@@ -1197,18 +941,21 @@ function buildApp(opts = {}) {
           return reply.redirect('/admin/login');
         }
 
-        const existing = app.db.prepare(
-          'SELECT id FROM calendar_connections WHERE provider = ? AND email = ? AND user_id = ?'
-        ).get('google', email, userId);
+        const existing = await app.db.getOne(
+          'SELECT id FROM calendar_connections WHERE provider = $1 AND email = $2 AND user_id = $3',
+          ['google', email, userId]
+        );
 
         if (existing) {
-          app.db.prepare(
-            'UPDATE calendar_connections SET encrypted_access_token = ?, encrypted_refresh_token = ?, token_expiry = ?, status = ? WHERE id = ?'
-          ).run(encryptedAccess, encryptedRefresh || '', tokenExpiry, 'connected', existing.id);
+          await app.db.run(
+            'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4 WHERE id = $5',
+            [encryptedAccess, encryptedRefresh || '', tokenExpiry, 'connected', existing.id]
+          );
         } else {
-          app.db.prepare(
-            'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          ).run(userId, 'google', encryptedAccess, encryptedRefresh || '', tokenExpiry, email, 'connected');
+          await app.db.run(
+            'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+            [userId, 'google', encryptedAccess, encryptedRefresh || '', tokenExpiry, email, 'connected']
+          );
         }
 
         return reply.redirect('/admin/calendars');
@@ -1290,25 +1037,27 @@ function buildApp(opts = {}) {
       }
 
       const msEmail = meData.mail || meData.userPrincipalName;
-      const msExisting = app.db.prepare(
-        'SELECT id FROM calendar_connections WHERE provider = ? AND email = ? AND user_id = ?'
-      ).get('microsoft', msEmail, userId);
+      const msExisting = await app.db.getOne(
+        'SELECT id FROM calendar_connections WHERE provider = $1 AND email = $2 AND user_id = $3',
+        ['microsoft', msEmail, userId]
+      );
 
       if (msExisting) {
-        app.db.prepare(
-          'UPDATE calendar_connections SET encrypted_access_token = ?, encrypted_refresh_token = ?, token_expiry = ?, status = ? WHERE id = ?'
-        ).run(
-          encrypt(tokenData.access_token, encryptionKey),
-          encrypt(tokenData.refresh_token, encryptionKey),
-          expiresAt,
-          'connected',
-          msExisting.id
+        await app.db.run(
+          'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4 WHERE id = $5',
+          [
+            encrypt(tokenData.access_token, encryptionKey),
+            encrypt(tokenData.refresh_token, encryptionKey),
+            expiresAt,
+            'connected',
+            msExisting.id
+          ]
         );
       } else {
-        app.db.prepare(`
+        await app.db.run(`
           INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
           userId,
           'microsoft',
           encrypt(tokenData.access_token, encryptionKey),
@@ -1316,7 +1065,7 @@ function buildApp(opts = {}) {
           expiresAt,
           msEmail,
           'connected'
-        );
+        ]);
       }
 
       return reply.redirect('/admin/calendars');
@@ -1382,18 +1131,21 @@ function buildApp(opts = {}) {
         return reply.redirect('/admin/login');
       }
 
-      const zohoExisting = app.db.prepare(
-        'SELECT id FROM calendar_connections WHERE provider = ? AND email = ? AND user_id = ?'
-      ).get('zoho', email, userId);
+      const zohoExisting = await app.db.getOne(
+        'SELECT id FROM calendar_connections WHERE provider = $1 AND email = $2 AND user_id = $3',
+        ['zoho', email, userId]
+      );
 
       if (zohoExisting) {
-        app.db.prepare(
-          'UPDATE calendar_connections SET encrypted_access_token = ?, encrypted_refresh_token = ?, token_expiry = ?, status = ? WHERE id = ?'
-        ).run(encryptedAccess, encryptedRefresh, expiresAt, 'connected', zohoExisting.id);
+        await app.db.run(
+          'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4 WHERE id = $5',
+          [encryptedAccess, encryptedRefresh, expiresAt, 'connected', zohoExisting.id]
+        );
       } else {
-        app.db.prepare(
-          'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(userId, 'zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected');
+        await app.db.run(
+          'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+          [userId, 'zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected']
+        );
       }
 
       return reply.redirect('/admin/calendars');
@@ -1402,8 +1154,8 @@ function buildApp(opts = {}) {
     app.post('/calendars/:id/disconnect', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { id } = request.params;
       const adminId = request.session.get('adminId');
-      app.db.prepare("UPDATE booking_profiles SET write_calendar_id = NULL WHERE write_calendar_id = ? AND user_id = ?").run(id, adminId);
-      app.db.prepare('DELETE FROM calendar_connections WHERE id = ? AND user_id = ?').run(id, adminId);
+      await app.db.run("UPDATE booking_profiles SET write_calendar_id = NULL WHERE write_calendar_id = $1 AND user_id = $2", [id, adminId]);
+      await app.db.run('DELETE FROM calendar_connections WHERE id = $1 AND user_id = $2', [id, adminId]);
       return reply.redirect('/admin/calendars');
     });
 
@@ -1411,7 +1163,7 @@ function buildApp(opts = {}) {
 
     app.get('/settings', async (request, reply) => {
       const adminId = request.session.get('adminId');
-      const admin = app.db.prepare('SELECT timezone, notification_email FROM admin WHERE id = ?').get(adminId);
+      const admin = await app.db.getOne('SELECT timezone, notification_email FROM admin WHERE id = $1', [adminId]);
       const token = reply.generateCsrf();
       const flash = request.session.get('flash') || '';
       request.session.set('flash', '');
@@ -1502,7 +1254,7 @@ function buildApp(opts = {}) {
         return reply.redirect('/admin/settings');
       }
 
-      app.db.prepare('UPDATE admin SET timezone = ? WHERE id = ?').run(timezone, adminId);
+      await app.db.run('UPDATE admin SET timezone = $1 WHERE id = $2', [timezone, adminId]);
       request.session.set('flash', 'Timezone updated successfully');
       return reply.redirect('/admin/settings');
     });
@@ -1510,7 +1262,7 @@ function buildApp(opts = {}) {
     app.post('/settings/password', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { current_password, new_password, confirm_password } = request.body || {};
       const adminId = request.session.get('adminId');
-      const admin = app.db.prepare('SELECT password_hash FROM admin WHERE id = ?').get(adminId);
+      const admin = await app.db.getOne('SELECT password_hash FROM admin WHERE id = $1', [adminId]);
 
       if (new_password !== confirm_password) {
         request.session.set('flash', 'New passwords do not match');
@@ -1524,7 +1276,7 @@ function buildApp(opts = {}) {
       }
 
       const newHash = await bcrypt.hash(new_password, 10);
-      app.db.prepare('UPDATE admin SET password_hash = ? WHERE id = ?').run(newHash, adminId);
+      await app.db.run('UPDATE admin SET password_hash = $1 WHERE id = $2', [newHash, adminId]);
       request.session.set('flash', 'Password changed successfully');
       return reply.redirect('/admin/settings');
     });
@@ -1539,7 +1291,7 @@ function buildApp(opts = {}) {
         return reply.redirect('/admin/settings');
       }
 
-      app.db.prepare('UPDATE admin SET notification_email = ? WHERE id = ?').run(email, adminId);
+      await app.db.run('UPDATE admin SET notification_email = $1 WHERE id = $2', [email, adminId]);
       request.session.set('flash', email ? 'Notification email saved' : 'Notification email removed');
       return reply.redirect('/admin/settings');
     });
@@ -1564,8 +1316,8 @@ function buildApp(opts = {}) {
     registerCancellationApi(app, { encryptionKey });
   }, { prefix: '/api/cancel' });
 
-  app.addHook('onClose', () => {
-    db.close();
+  app.addHook('onClose', async () => {
+    await app.db.close();
   });
 
   return app;

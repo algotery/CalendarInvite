@@ -746,16 +746,17 @@ function registerProfileRoutes(app) {
   app.get('/profiles', async (request, reply) => {
     const token = reply.generateCsrf();
     const adminId = request.session.get('adminId');
-    const profiles = app.db.prepare("SELECT * FROM booking_profiles WHERE user_id = ? ORDER BY created_at DESC").all(adminId);
+    const profiles = await app.db.getAll("SELECT * FROM booking_profiles WHERE user_id = $1 ORDER BY created_at DESC", [adminId]);
     const baseUrl = `${request.protocol}://${request.hostname}${request.port && request.port !== 80 && request.port !== 443 ? ':' + request.port : ''}`;
 
-    const rows = profiles.map(p => {
+    const rows = await Promise.all(profiles.map(async p => {
       const bookingUrl = `${baseUrl}/book/${escapeHtml(p.slug)}`;
 
       // Get schedule summary for display
-      const schedules = app.db.prepare(
-        "SELECT day_of_week, start_time, end_time FROM schedule_templates WHERE profile_id = ? ORDER BY day_of_week, start_time"
-      ).all(p.id);
+      const schedules = await app.db.getAll(
+        "SELECT day_of_week, start_time, end_time FROM schedule_templates WHERE profile_id = $1 ORDER BY day_of_week, start_time",
+        [p.id]
+      );
 
       const schedulesByDay = {};
       schedules.forEach(s => {
@@ -796,12 +797,13 @@ function registerProfileRoutes(app) {
           </div>
         </div>
       </div>
-    `}).join('');
+    `}));
 
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
-    const defaultSchedules = app.db.prepare(
-      "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = ? ORDER BY day_of_week, start_time"
-    ).all(adminId);
+    const defaultSchedules = await app.db.getAll(
+      "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = $1 ORDER BY day_of_week, start_time",
+      [adminId]
+    );
 
     const SHORT_DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -869,7 +871,7 @@ function registerProfileRoutes(app) {
 
         <div id="profiles-tab-content" class="profiles-tab-panel active">
           <div class="profiles-list">
-            ${rows || `<div class="calendars-empty">
+            ${rows.join('') || `<div class="calendars-empty">
                 <div class="calendars-empty-icon">
                   <i class="ph-duotone ph-user-circle-plus"></i>
                 </div>
@@ -1132,10 +1134,9 @@ function registerProfileRoutes(app) {
     }
 
     const adminId = request.session.get('adminId');
-    app.db.prepare("DELETE FROM default_schedule_templates WHERE user_id = ?").run(adminId);
-    const insert = app.db.prepare("INSERT INTO default_schedule_templates (user_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)");
+    await app.db.run("DELETE FROM default_schedule_templates WHERE user_id = $1", [adminId]);
     for (const entry of entries) {
-      insert.run(adminId, entry.day_of_week, entry.start_time, entry.end_time);
+      await app.db.run("INSERT INTO default_schedule_templates (user_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)", [adminId, entry.day_of_week, entry.start_time, entry.end_time]);
     }
 
     return reply.redirect('/admin/profiles');
@@ -1144,11 +1145,12 @@ function registerProfileRoutes(app) {
   app.get('/profiles/new', async (request, reply) => {
     const token = reply.generateCsrf();
     const adminId = request.session.get('adminId');
-    const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE user_id = ? AND status = 'connected'").all(adminId);
+    const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
-    const defaultTemplates = app.db.prepare(
-      "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = ? ORDER BY day_of_week, start_time"
-    ).all(adminId);
+    const defaultTemplates = await app.db.getAll(
+      "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = $1 ORDER BY day_of_week, start_time",
+      [adminId]
+    );
     const html = profileFormHtml(token, null, calendars, [], { templates: defaultTemplates, readCalendarIds: [] }, null, [], adminTimezone);
     if (request.query.partial === '1') {
       return reply.type('text/html').send(html);
@@ -1162,16 +1164,16 @@ function registerProfileRoutes(app) {
 
     if (!slug || !SLUG_REGEX.test(slug)) {
       const token = reply.generateCsrf();
-      const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE user_id = ? AND status = 'connected'").all(adminId);
+      const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
       const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.');
       if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
     }
 
-    const existing = app.db.prepare("SELECT id FROM booking_profiles WHERE slug = ?").get(slug);
+    const existing = await app.db.getOne("SELECT id FROM booking_profiles WHERE slug = $1", [slug]);
     if (existing) {
       const token = reply.generateCsrf();
-      const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE user_id = ? AND status = 'connected'").all(adminId);
+      const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
       const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'That slug already exists. Please choose a different one.');
       if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
@@ -1179,52 +1181,49 @@ function registerProfileRoutes(app) {
 
     const buffer_time_minutes = parseInt(request.body.buffer_time_minutes, 10) || 0;
 
-    const result = app.db.prepare(
-      "INSERT INTO booking_profiles (user_id, slug, name, is_active, write_calendar_id, meeting_link_url, meeting_tool, buffer_time_minutes, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)"
-    ).run(adminId, slug, name, null, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, new Date().toISOString());
+    const result = await app.db.query(
+      "INSERT INTO booking_profiles (user_id, slug, name, is_active, write_calendar_id, meeting_link_url, meeting_tool, buffer_time_minutes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+      [adminId, slug, name, true, null, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, new Date().toISOString()]
+    );
 
-    const profileId = result.lastInsertRowid;
+    const profileId = result.rows[0].id;
 
     const attendees = parseAttendeesFromBody(request.body);
-    const insertAttendee = app.db.prepare("INSERT INTO default_attendees (profile_id, email) VALUES (?, ?)");
     for (const email of attendees) {
-      insertAttendee.run(profileId, email);
+      await app.db.run("INSERT INTO default_attendees (profile_id, email) VALUES ($1, $2)", [profileId, email]);
     }
 
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
     let scheduleEntries = parseScheduleFromBody(request.body, adminTimezone);
     if (scheduleEntries.length === 0) {
-      scheduleEntries = app.db.prepare(
-        "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = ? ORDER BY day_of_week, start_time"
-      ).all(adminId);
+      scheduleEntries = await app.db.getAll(
+        "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = $1 ORDER BY day_of_week, start_time",
+        [adminId]
+      );
     }
-    const insertSchedule = app.db.prepare("INSERT INTO schedule_templates (profile_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)");
     for (const entry of scheduleEntries) {
-      insertSchedule.run(profileId, entry.day_of_week, entry.start_time, entry.end_time);
+      await app.db.run("INSERT INTO schedule_templates (profile_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)", [profileId, entry.day_of_week, entry.start_time, entry.end_time]);
     }
 
     const readCalIds = request.body['read_calendar_ids[]'];
     if (readCalIds) {
       const ids = Array.isArray(readCalIds) ? readCalIds : [readCalIds];
-      const insertRead = app.db.prepare("INSERT INTO profile_read_calendars (profile_id, calendar_connection_id) VALUES (?, ?)");
       for (const cid of ids) {
-        insertRead.run(profileId, Number(cid));
+        await app.db.run("INSERT INTO profile_read_calendars (profile_id, calendar_connection_id) VALUES ($1, $2)", [profileId, Number(cid)]);
       }
     }
 
     const writeCalIds = request.body['write_calendar_ids[]'];
     if (writeCalIds) {
       const wIds = Array.isArray(writeCalIds) ? writeCalIds : [writeCalIds];
-      const insertWrite = app.db.prepare("INSERT INTO profile_write_calendars (profile_id, calendar_connection_id) VALUES (?, ?)");
       for (const cid of wIds) {
-        insertWrite.run(profileId, Number(cid));
+        await app.db.run("INSERT INTO profile_write_calendars (profile_id, calendar_connection_id) VALUES ($1, $2)", [profileId, Number(cid)]);
       }
     }
 
     const overrides = parseOverridesFromBody(request.body);
-    const insertOverride = app.db.prepare("INSERT INTO schedule_overrides (profile_id, date, is_blocked, custom_ranges) VALUES (?, ?, ?, ?)");
     for (const o of overrides) {
-      insertOverride.run(profileId, o.date, o.is_blocked, o.custom_ranges);
+      await app.db.run("INSERT INTO schedule_overrides (profile_id, date, is_blocked, custom_ranges) VALUES ($1, $2, $3, $4)", [profileId, o.date, o.is_blocked, o.custom_ranges]);
     }
 
     return reply.redirect('/admin/profiles');
@@ -1233,18 +1232,18 @@ function registerProfileRoutes(app) {
   app.get('/profiles/:id/edit', async (request, reply) => {
     const { id } = request.params;
     const adminId = request.session.get('adminId');
-    const profile = app.db.prepare("SELECT * FROM booking_profiles WHERE id = ? AND user_id = ?").get(id, adminId);
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE id = $1 AND user_id = $2", [id, adminId]);
     if (!profile) {
       return reply.code(404).type('text/html').send(require('./app').BASE_LAYOUT('Not Found', '<h1>Profile not found</h1>'));
     }
 
     const token = reply.generateCsrf();
-    const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE user_id = ? AND status = 'connected'").all(adminId);
-    const attendees = app.db.prepare("SELECT email FROM default_attendees WHERE profile_id = ?").all(profile.id).map(a => a.email);
-    const templates = app.db.prepare("SELECT * FROM schedule_templates WHERE profile_id = ? ORDER BY day_of_week, start_time").all(profile.id);
-    const readCalendarIds = app.db.prepare("SELECT calendar_connection_id FROM profile_read_calendars WHERE profile_id = ?").all(profile.id).map(r => r.calendar_connection_id);
-    const writeCalendarIds = app.db.prepare("SELECT calendar_connection_id FROM profile_write_calendars WHERE profile_id = ?").all(profile.id).map(r => r.calendar_connection_id);
-    const overrides = app.db.prepare("SELECT * FROM schedule_overrides WHERE profile_id = ? ORDER BY date").all(profile.id);
+    const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
+    const attendees = (await app.db.getAll("SELECT email FROM default_attendees WHERE profile_id = $1", [profile.id])).map(a => a.email);
+    const templates = await app.db.getAll("SELECT * FROM schedule_templates WHERE profile_id = $1 ORDER BY day_of_week, start_time", [profile.id]);
+    const readCalendarIds = (await app.db.getAll("SELECT calendar_connection_id FROM profile_read_calendars WHERE profile_id = $1", [profile.id])).map(r => r.calendar_connection_id);
+    const writeCalendarIds = (await app.db.getAll("SELECT calendar_connection_id FROM profile_write_calendars WHERE profile_id = $1", [profile.id])).map(r => r.calendar_connection_id);
+    const overrides = await app.db.getAll("SELECT * FROM schedule_overrides WHERE profile_id = $1 ORDER BY date", [profile.id]);
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
 
     const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds, writeCalendarIds }, null, overrides, adminTimezone);
@@ -1257,7 +1256,7 @@ function registerProfileRoutes(app) {
   app.post('/profiles/:id', { preHandler: app.csrfProtection }, async (request, reply) => {
     const { id } = request.params;
     const adminId = request.session.get('adminId');
-    const profile = app.db.prepare("SELECT * FROM booking_profiles WHERE id = ? AND user_id = ?").get(id, adminId);
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE id = $1 AND user_id = $2", [id, adminId]);
     if (!profile) {
       return reply.code(404).type('text/html').send(require('./app').BASE_LAYOUT('Not Found', '<h1>Profile not found</h1>'));
     }
@@ -1267,73 +1266,69 @@ function registerProfileRoutes(app) {
 
     if (!slug || !SLUG_REGEX.test(slug)) {
       const token = reply.generateCsrf();
-      const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE user_id = ? AND status = 'connected'").all(adminId);
-      const attendees = app.db.prepare("SELECT email FROM default_attendees WHERE profile_id = ?").all(profile.id).map(a => a.email);
-      const templates = app.db.prepare("SELECT * FROM schedule_templates WHERE profile_id = ?").all(profile.id);
+      const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
+      const attendees = (await app.db.getAll("SELECT email FROM default_attendees WHERE profile_id = $1", [profile.id])).map(a => a.email);
+      const templates = await app.db.getAll("SELECT * FROM schedule_templates WHERE profile_id = $1", [profile.id]);
       const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.');
       if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
 
-    const existing = app.db.prepare("SELECT id FROM booking_profiles WHERE slug = ? AND id != ?").get(slug, id);
+    const existing = await app.db.getOne("SELECT id FROM booking_profiles WHERE slug = $1 AND id != $2", [slug, id]);
     if (existing) {
       const token = reply.generateCsrf();
-      const calendars = app.db.prepare("SELECT * FROM calendar_connections WHERE user_id = ? AND status = 'connected'").all(adminId);
-      const attendees = app.db.prepare("SELECT email FROM default_attendees WHERE profile_id = ?").all(profile.id).map(a => a.email);
-      const templates = app.db.prepare("SELECT * FROM schedule_templates WHERE profile_id = ?").all(profile.id);
+      const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
+      const attendees = (await app.db.getAll("SELECT email FROM default_attendees WHERE profile_id = $1", [profile.id])).map(a => a.email);
+      const templates = await app.db.getAll("SELECT * FROM schedule_templates WHERE profile_id = $1", [profile.id]);
       const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'That slug already exists.');
       if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
 
-    app.db.prepare(
-      "UPDATE booking_profiles SET slug = ?, name = ?, write_calendar_id = ?, meeting_link_url = ?, meeting_tool = ?, buffer_time_minutes = ? WHERE id = ?"
-    ).run(slug, name, null, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, id);
+    await app.db.run(
+      "UPDATE booking_profiles SET slug = $1, name = $2, write_calendar_id = $3, meeting_link_url = $4, meeting_tool = $5, buffer_time_minutes = $6 WHERE id = $7",
+      [slug, name, null, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, id]
+    );
 
     // Replace attendees
-    app.db.prepare("DELETE FROM default_attendees WHERE profile_id = ?").run(id);
+    await app.db.run("DELETE FROM default_attendees WHERE profile_id = $1", [id]);
     const attendees = parseAttendeesFromBody(request.body);
-    const insertAttendee = app.db.prepare("INSERT INTO default_attendees (profile_id, email) VALUES (?, ?)");
     for (const email of attendees) {
-      insertAttendee.run(id, email);
+      await app.db.run("INSERT INTO default_attendees (profile_id, email) VALUES ($1, $2)", [id, email]);
     }
 
     // Replace schedule templates
-    app.db.prepare("DELETE FROM schedule_templates WHERE profile_id = ?").run(id);
+    await app.db.run("DELETE FROM schedule_templates WHERE profile_id = $1", [id]);
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
     const scheduleEntries = parseScheduleFromBody(request.body, adminTimezone);
-    const insertSchedule = app.db.prepare("INSERT INTO schedule_templates (profile_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)");
     for (const entry of scheduleEntries) {
-      insertSchedule.run(id, entry.day_of_week, entry.start_time, entry.end_time);
+      await app.db.run("INSERT INTO schedule_templates (profile_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)", [id, entry.day_of_week, entry.start_time, entry.end_time]);
     }
 
     // Replace read calendars
-    app.db.prepare("DELETE FROM profile_read_calendars WHERE profile_id = ?").run(id);
+    await app.db.run("DELETE FROM profile_read_calendars WHERE profile_id = $1", [id]);
     const readCalIds = request.body['read_calendar_ids[]'];
     if (readCalIds) {
       const ids = Array.isArray(readCalIds) ? readCalIds : [readCalIds];
-      const insertRead = app.db.prepare("INSERT INTO profile_read_calendars (profile_id, calendar_connection_id) VALUES (?, ?)");
       for (const cid of ids) {
-        insertRead.run(id, Number(cid));
+        await app.db.run("INSERT INTO profile_read_calendars (profile_id, calendar_connection_id) VALUES ($1, $2)", [id, Number(cid)]);
       }
     }
 
     // Replace write calendars
-    app.db.prepare("DELETE FROM profile_write_calendars WHERE profile_id = ?").run(id);
+    await app.db.run("DELETE FROM profile_write_calendars WHERE profile_id = $1", [id]);
     const writeCalIds = request.body['write_calendar_ids[]'];
     if (writeCalIds) {
       const wIds = Array.isArray(writeCalIds) ? writeCalIds : [writeCalIds];
-      const insertWrite = app.db.prepare("INSERT INTO profile_write_calendars (profile_id, calendar_connection_id) VALUES (?, ?)");
       for (const cid of wIds) {
-        insertWrite.run(id, Number(cid));
+        await app.db.run("INSERT INTO profile_write_calendars (profile_id, calendar_connection_id) VALUES ($1, $2)", [id, Number(cid)]);
       }
     }
 
-    app.db.prepare("DELETE FROM schedule_overrides WHERE profile_id = ?").run(id);
+    await app.db.run("DELETE FROM schedule_overrides WHERE profile_id = $1", [id]);
     const overrides = parseOverridesFromBody(request.body);
-    const insertOverride = app.db.prepare("INSERT INTO schedule_overrides (profile_id, date, is_blocked, custom_ranges) VALUES (?, ?, ?, ?)");
     for (const o of overrides) {
-      insertOverride.run(id, o.date, o.is_blocked, o.custom_ranges);
+      await app.db.run("INSERT INTO schedule_overrides (profile_id, date, is_blocked, custom_ranges) VALUES ($1, $2, $3, $4)", [id, o.date, o.is_blocked, o.custom_ranges]);
     }
 
     return reply.redirect('/admin/profiles');
@@ -1344,18 +1339,18 @@ function registerProfileRoutes(app) {
   app.post('/profiles/:id/toggle', { preHandler: app.csrfProtection }, async (request, reply) => {
     const { id } = request.params;
     const adminId = request.session.get('adminId');
-    app.db.prepare("UPDATE booking_profiles SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END WHERE id = ? AND user_id = ?").run(id, adminId);
+    await app.db.run("UPDATE booking_profiles SET is_active = CASE WHEN is_active = true THEN false ELSE true END WHERE id = $1 AND user_id = $2", [id, adminId]);
     return reply.redirect('/admin/profiles');
   });
 
   app.post('/profiles/:id/delete', { preHandler: app.csrfProtection }, async (request, reply) => {
     const { id } = request.params;
     const adminId = request.session.get('adminId');
-    const profile = app.db.prepare("SELECT * FROM booking_profiles WHERE id = ? AND user_id = ?").get(id, adminId);
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE id = $1 AND user_id = $2", [id, adminId]);
     if (!profile) {
       return reply.code(404).type('text/html').send(require('./app').BASE_LAYOUT('Not Found', '<h1>Profile not found</h1>'));
     }
-    app.db.prepare("DELETE FROM booking_profiles WHERE id = ? AND user_id = ?").run(id, adminId);
+    await app.db.run("DELETE FROM booking_profiles WHERE id = $1 AND user_id = $2", [id, adminId]);
     return reply.redirect('/admin/profiles');
   });
 }

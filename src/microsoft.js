@@ -4,7 +4,7 @@ function createMicrosoftClient({ db, encryptionKey, clientId, clientSecret, tena
   const fetch = fetchFn || globalThis.fetch;
 
   async function getValidAccessToken(connectionId) {
-    const conn = db.prepare('SELECT * FROM calendar_connections WHERE id = ?').get(connectionId);
+    const conn = await db.getOne('SELECT * FROM calendar_connections WHERE id = $1', [connectionId]);
     if (!conn) throw new Error(`Connection ${connectionId} not found`);
 
     const now = new Date();
@@ -31,21 +31,14 @@ function createMicrosoftClient({ db, encryptionKey, clientId, clientSecret, tena
 
     const tokenData = await response.json();
     if (!response.ok) {
-      db.prepare('UPDATE calendar_connections SET status = ? WHERE id = ?').run('expired', connectionId);
+      await db.run('UPDATE calendar_connections SET status = $1 WHERE id = $2', ['expired', connectionId]);
       throw new Error('Token refresh failed');
     }
 
     const newExpiry = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
-    db.prepare(`
-      UPDATE calendar_connections
-      SET encrypted_access_token = ?, encrypted_refresh_token = ?, token_expiry = ?, status = ?
-      WHERE id = ?
-    `).run(
-      encrypt(tokenData.access_token, encryptionKey),
-      encrypt(tokenData.refresh_token, encryptionKey),
-      newExpiry,
-      'connected',
-      connectionId
+    await db.run(
+      'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4 WHERE id = $5',
+      [encrypt(tokenData.access_token, encryptionKey), encrypt(tokenData.refresh_token, encryptionKey), newExpiry, 'connected', connectionId]
     );
 
     return tokenData.access_token;
@@ -53,7 +46,7 @@ function createMicrosoftClient({ db, encryptionKey, clientId, clientSecret, tena
 
   async function getMicrosoftBusySlots(connectionId, timeMin, timeMax) {
     const accessToken = await getValidAccessToken(connectionId);
-    const conn = db.prepare('SELECT email FROM calendar_connections WHERE id = ?').get(connectionId);
+    const conn = await db.getOne('SELECT email FROM calendar_connections WHERE id = $1', [connectionId]);
 
     const response = await fetch('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
       method: 'POST',

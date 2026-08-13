@@ -1,183 +1,146 @@
-const Database = require('better-sqlite3');
-const fs = require('node:fs');
-const path = require('node:path');
+const { Pool } = require('pg');
 
-function initializeSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS admin (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT NOT NULL UNIQUE,
-      username TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      timezone TEXT NOT NULL DEFAULT 'UTC',
-      notification_email TEXT DEFAULT ''
-    );
+const SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS admin (
+    id SERIAL PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    notification_email TEXT DEFAULT ''
+  );
 
-    CREATE TABLE IF NOT EXISTS calendar_connections (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
-      provider TEXT NOT NULL CHECK(provider IN ('google', 'microsoft', 'zoho')),
-      encrypted_access_token TEXT,
-      encrypted_refresh_token TEXT,
-      token_expiry TEXT,
-      email TEXT,
-      status TEXT NOT NULL DEFAULT 'connected' CHECK(status IN ('connected', 'expired'))
-    );
+  CREATE TABLE IF NOT EXISTS calendar_connections (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK(provider IN ('google', 'microsoft', 'zoho')),
+    encrypted_access_token TEXT,
+    encrypted_refresh_token TEXT,
+    token_expiry TEXT,
+    email TEXT,
+    status TEXT NOT NULL DEFAULT 'connected' CHECK(status IN ('connected', 'expired'))
+  );
 
-    CREATE TABLE IF NOT EXISTS booking_profiles (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
-      slug TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      write_calendar_id INTEGER REFERENCES calendar_connections(id),
-      meeting_link_url TEXT,
-      meeting_tool TEXT CHECK(meeting_tool IN ('teams', 'meet')),
-      buffer_time_minutes INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL
-    );
+  CREATE TABLE IF NOT EXISTS booking_profiles (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    write_calendar_id INTEGER REFERENCES calendar_connections(id),
+    meeting_link_url TEXT,
+    meeting_tool TEXT CHECK(meeting_tool IN ('teams', 'meet')),
+    buffer_time_minutes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
 
-    CREATE TABLE IF NOT EXISTS profile_read_calendars (
-      profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
-      calendar_connection_id INTEGER NOT NULL REFERENCES calendar_connections(id) ON DELETE CASCADE,
-      PRIMARY KEY (profile_id, calendar_connection_id)
-    );
+  CREATE TABLE IF NOT EXISTS profile_read_calendars (
+    profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
+    calendar_connection_id INTEGER NOT NULL REFERENCES calendar_connections(id) ON DELETE CASCADE,
+    PRIMARY KEY (profile_id, calendar_connection_id)
+  );
 
-    CREATE TABLE IF NOT EXISTS profile_write_calendars (
-      profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
-      calendar_connection_id INTEGER NOT NULL REFERENCES calendar_connections(id) ON DELETE CASCADE,
-      PRIMARY KEY (profile_id, calendar_connection_id)
-    );
+  CREATE TABLE IF NOT EXISTS profile_write_calendars (
+    profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
+    calendar_connection_id INTEGER NOT NULL REFERENCES calendar_connections(id) ON DELETE CASCADE,
+    PRIMARY KEY (profile_id, calendar_connection_id)
+  );
 
+  CREATE TABLE IF NOT EXISTS default_attendees (
+    id SERIAL PRIMARY KEY,
+    profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
+    email TEXT NOT NULL
+  );
 
-    CREATE TABLE IF NOT EXISTS default_attendees (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
-      email TEXT NOT NULL
-    );
+  CREATE TABLE IF NOT EXISTS schedule_templates (
+    id SERIAL PRIMARY KEY,
+    profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
+    day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL
+  );
 
-    CREATE TABLE IF NOT EXISTS schedule_templates (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
-      day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
-      start_time TEXT NOT NULL,
-      end_time TEXT NOT NULL
-    );
+  CREATE TABLE IF NOT EXISTS default_schedule_templates (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
+    day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL
+  );
 
-    CREATE TABLE IF NOT EXISTS default_schedule_templates (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL REFERENCES admin(id) ON DELETE CASCADE,
-      day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
-      start_time TEXT NOT NULL,
-      end_time TEXT NOT NULL
-    );
+  CREATE TABLE IF NOT EXISTS schedule_overrides (
+    id SERIAL PRIMARY KEY,
+    profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    is_blocked INTEGER NOT NULL DEFAULT 0,
+    custom_ranges TEXT,
+    UNIQUE(profile_id, date)
+  );
 
-    CREATE TABLE IF NOT EXISTS schedule_overrides (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
-      date TEXT NOT NULL,
-      is_blocked INTEGER NOT NULL DEFAULT 0,
-      custom_ranges TEXT,
-      UNIQUE(profile_id, date)
-    );
+  CREATE TABLE IF NOT EXISTS bookings (
+    id SERIAL PRIMARY KEY,
+    profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
+    booker_name TEXT NOT NULL,
+    booker_email TEXT NOT NULL,
+    additional_attendees TEXT,
+    title TEXT NOT NULL,
+    description TEXT,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    duration_minutes INTEGER NOT NULL,
+    cancellation_token TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'confirmed' CHECK(status IN ('confirmed', 'cancelled')),
+    calendar_event_id TEXT,
+    created_at TEXT NOT NULL
+  );
 
-    CREATE TABLE IF NOT EXISTS bookings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      profile_id INTEGER NOT NULL REFERENCES booking_profiles(id) ON DELETE CASCADE,
-      booker_name TEXT NOT NULL,
-      booker_email TEXT NOT NULL,
-      additional_attendees TEXT,
-      title TEXT NOT NULL,
-      description TEXT,
-      start_time TEXT NOT NULL,
-      end_time TEXT NOT NULL,
-      duration_minutes INTEGER NOT NULL,
-      cancellation_token TEXT NOT NULL UNIQUE,
-      status TEXT NOT NULL DEFAULT 'confirmed' CHECK(status IN ('confirmed', 'cancelled')),
-      calendar_event_id TEXT,
-      created_at TEXT NOT NULL
-    );
+  CREATE TABLE IF NOT EXISTS rate_limits (
+    id SERIAL PRIMARY KEY,
+    key TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('ip', 'email')),
+    endpoint TEXT NOT NULL,
+    timestamp TEXT NOT NULL
+  );
 
-    CREATE TABLE IF NOT EXISTS rate_limits (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      key TEXT NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('ip', 'email')),
-      endpoint TEXT NOT NULL,
-      timestamp TEXT NOT NULL
-    );
+  CREATE INDEX IF NOT EXISTS idx_rate_limits_key_type ON rate_limits(key, type);
+  CREATE INDEX IF NOT EXISTS idx_rate_limits_timestamp ON rate_limits(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_bookings_profile_status ON bookings(profile_id, status);
+  CREATE INDEX IF NOT EXISTS idx_bookings_start_time ON bookings(start_time);
+  CREATE INDEX IF NOT EXISTS idx_bookings_profile_start ON bookings(profile_id, start_time);
+  CREATE INDEX IF NOT EXISTS idx_bookings_cancellation_token ON bookings(cancellation_token);
+  CREATE INDEX IF NOT EXISTS idx_profiles_slug ON booking_profiles(slug);
+  CREATE INDEX IF NOT EXISTS idx_profiles_active ON booking_profiles(is_active);
+  CREATE INDEX IF NOT EXISTS idx_schedule_templates_profile_day ON schedule_templates(profile_id, day_of_week);
+  CREATE INDEX IF NOT EXISTS idx_schedule_overrides_profile_date ON schedule_overrides(profile_id, date);
+`;
 
-    CREATE INDEX IF NOT EXISTS idx_rate_limits_key_type ON rate_limits(key, type);
-    CREATE INDEX IF NOT EXISTS idx_rate_limits_timestamp ON rate_limits(timestamp);
-  `);
+async function createDatabase(connectionString) {
+  const pool = new Pool({ connectionString });
+
+  await pool.query(SCHEMA_SQL);
+
+  return {
+    async query(text, params) {
+      const result = await pool.query(text, params);
+      return result;
+    },
+    async getOne(text, params) {
+      const result = await pool.query(text, params);
+      return result.rows[0] || null;
+    },
+    async getAll(text, params) {
+      const result = await pool.query(text, params);
+      return result.rows;
+    },
+    async run(text, params) {
+      const result = await pool.query(text, params);
+      return result;
+    },
+    async close() {
+      await pool.end();
+    },
+    pool,
+  };
 }
 
-function createDatabase(dbPath) {
-  if (dbPath !== ':memory:') {
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  }
-  const db = new Database(dbPath);
-
-  // Performance optimizations
-  db.pragma('journal_mode = WAL'); // Write-Ahead Logging for better concurrency
-  db.pragma('foreign_keys = ON');
-  db.pragma('synchronous = NORMAL'); // Faster writes, still safe
-  db.pragma('cache_size = -64000'); // 64MB cache (negative = kibibytes)
-  db.pragma('temp_store = MEMORY'); // Store temp tables in memory
-  db.pragma('mmap_size = 30000000000'); // Memory-mapped I/O
-
-  initializeSchema(db);
-
-  // Migration: add buffer_time_minutes to existing databases that predate this column
-  const cols = db.pragma('table_info(booking_profiles)');
-  if (!cols.some(c => c.name === 'buffer_time_minutes')) {
-    db.exec('ALTER TABLE booking_profiles ADD COLUMN buffer_time_minutes INTEGER NOT NULL DEFAULT 0');
-  }
-
-  // Migration: add notification_email to admin table
-  const adminCols = db.pragma('table_info(admin)');
-  if (!adminCols.some(c => c.name === 'notification_email')) {
-    db.exec("ALTER TABLE admin ADD COLUMN notification_email TEXT DEFAULT ''");
-  }
-
-  // Migration: add email column to admin table
-  if (!adminCols.some(c => c.name === 'email')) {
-    db.exec("ALTER TABLE admin ADD COLUMN email TEXT DEFAULT ''");
-    // Use notification_email if set, otherwise username as fallback
-    db.exec("UPDATE admin SET email = CASE WHEN notification_email != '' THEN notification_email ELSE username END WHERE email = ''");
-    try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_email ON admin(email)"); } catch {}
-  }
-
-  // Migration: add user_id to calendar_connections
-  const ccCols = db.pragma('table_info(calendar_connections)');
-  if (!ccCols.some(c => c.name === 'user_id')) {
-    db.exec("ALTER TABLE calendar_connections ADD COLUMN user_id INTEGER REFERENCES admin(id) DEFAULT NULL");
-    const firstAdmin = db.prepare("SELECT id FROM admin LIMIT 1").get();
-    if (firstAdmin) {
-      db.exec(`UPDATE calendar_connections SET user_id = ${firstAdmin.id} WHERE user_id IS NULL`);
-    }
-  }
-
-  // Migration: add user_id to booking_profiles
-  const bpCols = db.pragma('table_info(booking_profiles)');
-  if (!bpCols.some(c => c.name === 'user_id')) {
-    db.exec("ALTER TABLE booking_profiles ADD COLUMN user_id INTEGER REFERENCES admin(id) DEFAULT NULL");
-    const firstAdmin = db.prepare("SELECT id FROM admin LIMIT 1").get();
-    if (firstAdmin) {
-      db.exec(`UPDATE booking_profiles SET user_id = ${firstAdmin.id} WHERE user_id IS NULL`);
-    }
-  }
-
-  // Migration: add user_id to default_schedule_templates
-  const dstCols = db.pragma('table_info(default_schedule_templates)');
-  if (!dstCols.some(c => c.name === 'user_id')) {
-    db.exec("ALTER TABLE default_schedule_templates ADD COLUMN user_id INTEGER REFERENCES admin(id) DEFAULT NULL");
-    const firstAdmin = db.prepare("SELECT id FROM admin LIMIT 1").get();
-    if (firstAdmin) {
-      db.exec(`UPDATE default_schedule_templates SET user_id = ${firstAdmin.id} WHERE user_id IS NULL`);
-    }
-  }
-
-  return db;
-}
-
-module.exports = { initializeSchema, createDatabase };
+module.exports = { createDatabase };
