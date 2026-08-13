@@ -76,11 +76,11 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
   <title>${title} - CalendarInvite</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-  <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css">
-  <script src="https://unpkg.com/@phosphor-icons/web"></script>
   <link rel="stylesheet" href="/css/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css" media="print" onload="this.media='all'">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
 </head>
 <body${bodyClass}>
   ${content}
@@ -285,6 +285,7 @@ function buildApp(opts = {}) {
   app.register(fastifyStatic, {
     root: path.join(__dirname, '..', 'public'),
     prefix: '/',
+    maxAge: '7d',
   });
 
   app.register(formbody);
