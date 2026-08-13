@@ -355,14 +355,14 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               <div id="booking-error" style="display:none"></div>
 
               <form id="booking-form">
-                <label>
-                  Name *
-                  <input type="text" name="name" placeholder="Your Name" required>
-                </label>
-                <label>
-                  Email *
-                  <input type="email" name="email" placeholder="Your Email" required>
-                </label>
+                <div class="float-field">
+                  <input type="text" name="name" id="book-name" placeholder=" " required>
+                  <label for="book-name">Name *</label>
+                </div>
+                <div class="float-field">
+                  <input type="email" name="email" id="book-email" placeholder=" " required>
+                  <label for="book-email">Email *</label>
+                </div>
                 <div class="guests-section">
                   <button type="button" id="add-guests-btn" class="add-guests-btn" onclick="toggleGuestsInput()">
                     <i class="ph-bold ph-user-plus"></i> Add Guests
@@ -373,14 +373,14 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
                     <input type="hidden" name="additional_attendees" id="additional_attendees_hidden">
                   </div>
                 </div>
-                <label>
-                  Meeting Title
-                  <input type="text" name="title" placeholder="Meeting with ${escapeHtml(profile.name)}">
-                </label>
-                <label>
-                  Description (optional)
-                  <textarea name="description" placeholder="Add any notes or agenda items..." rows="4"></textarea>
-                </label>
+                <div class="float-field">
+                  <input type="text" name="title" id="book-title" placeholder=" ">
+                  <label for="book-title">Meeting Title</label>
+                </div>
+                <div class="float-field">
+                  <textarea name="description" id="book-desc" placeholder=" " rows="4"></textarea>
+                  <label for="book-desc">Description (optional)</label>
+                </div>
                 <button type="submit" style="width: 100%; margin-top: 16px;">Schedule Event</button>
               </form>
             </div>

@@ -7,7 +7,8 @@ const SCHEMA_SQL = `
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     timezone TEXT NOT NULL DEFAULT 'UTC',
-    notification_email TEXT DEFAULT ''
+    notification_email TEXT DEFAULT '',
+    theme TEXT NOT NULL DEFAULT 'light'
   );
 
   CREATE TABLE IF NOT EXISTS calendar_connections (
@@ -118,6 +119,8 @@ async function createDatabase(connectionString) {
   const pool = new Pool({ connectionString });
 
   await pool.query(SCHEMA_SQL);
+
+  await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'light'`).catch(() => {});
 
   return {
     async query(text, params) {

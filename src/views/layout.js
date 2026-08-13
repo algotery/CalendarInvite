@@ -55,6 +55,10 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  ${isBookingPage ? '<meta name="booking-page" content="1">' : ''}
+  <script>
+    (function(){if(document.querySelector('meta[name="booking-page"]'))return;var t=localStorage.getItem('theme');if(t==='dark')document.documentElement.setAttribute('data-theme','dark');})();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title} - CalendarInvite</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -67,6 +71,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
 </head>
 <body${bodyClass}>
+  <div id="toast-container" class="toast-container"></div>
   ${content}
   ${isAdmin ? `<div id="profile-overlay" class="profile-overlay" style="display:none">
     <div class="profile-overlay-backdrop"></div>
@@ -242,6 +247,63 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
 
       window.ProfileOverlay = { open: openOverlay, close: closeOverlay };
     })();
+
+    // Toast notification system
+    window.Toast = {
+      _timeout: null,
+      show: function(message, type) {
+        type = type || 'error';
+        var container = document.getElementById('toast-container');
+        container.innerHTML = '';
+        clearTimeout(this._timeout);
+        var toast = document.createElement('div');
+        toast.className = 'toast toast-' + type;
+        var icon = type === 'success' ? '<i class="ph-fill ph-check-circle"></i>' : type === 'warning' ? '<i class="ph-fill ph-warning"></i>' : '<i class="ph-fill ph-x-circle"></i>';
+        toast.innerHTML = icon + '<span>' + message + '</span>';
+        container.appendChild(toast);
+        requestAnimationFrame(function() { toast.classList.add('toast-visible'); });
+        this._timeout = setTimeout(function() { Toast.dismiss(toast); }, 4000);
+      },
+      dismiss: function(toast) {
+        if (!toast) return;
+        toast.classList.remove('toast-visible');
+        toast.classList.add('toast-hiding');
+        setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+      }
+    };
+
+    // Auto-convert inline alerts to toasts
+    document.addEventListener('DOMContentLoaded', function() {
+      var alerts = document.querySelectorAll('[role="alert"], .login-card .error');
+      alerts.forEach(function(el) {
+        var text = el.textContent.trim();
+        if (!text) return;
+        var type = el.classList.contains('success') ? 'success' : el.classList.contains('warning') ? 'warning' : 'error';
+        el.style.display = 'none';
+        Toast.show(text, type);
+      });
+
+      // AJAX form submit for login/register
+      var loginForm = document.querySelector('.login-card form[method="POST"]');
+      if (loginForm) {
+        loginForm.addEventListener('submit', function(e) {
+          e.preventDefault();
+          var form = this;
+          var btn = form.querySelector('button[type="submit"]');
+          btn.disabled = true;
+          fetch(form.action, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            body: new URLSearchParams(new FormData(form))
+          }).then(function(res) { return res.json().then(function(data) { return { status: res.status, data: data }; }); })
+            .then(function(result) {
+              btn.disabled = false;
+              if (result.data.redirect) { window.location.href = result.data.redirect; return; }
+              if (result.data.error) { Toast.show(result.data.error, 'error'); }
+            }).catch(function() { btn.disabled = false; Toast.show('Something went wrong. Please try again.', 'error'); });
+        });
+      }
+    });
   </script>
 </body>
 </html>`;

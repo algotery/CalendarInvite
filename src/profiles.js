@@ -202,8 +202,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
         <div class="floating-modal-header">
           <a href="/admin/profiles" class="floating-modal-close"><i class="ph-bold ph-x"></i></a>
           <span class="floating-modal-label">Event type</span>
-          <h1 class="floating-modal-title"><span class="floating-modal-dot"></span> ${escapeHtml(profile?.name || 'New Profile')}</h1>
-          <span class="floating-modal-subtitle">One-on-One</span>
+          <h1 class="floating-modal-title">${escapeHtml(profile?.name || 'New Profile')}</h1>
         </div>
 
         <div class="floating-modal-body">

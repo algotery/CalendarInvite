@@ -88,14 +88,14 @@ async function buildApp(opts = {}) {
             <div class="login-subtitle">Welcome back! Sign in to your account.</div>
             <form method="POST" action="/admin/login">
               <input type="hidden" name="_csrf" value="${token}">
-              <label>
-                Email
-                <input type="email" name="email" placeholder="Enter your email" required autofocus>
-              </label>
-              <label>
-                Password
-                <input type="password" name="password" placeholder="Enter your password" required>
-              </label>
+              <div class="float-field">
+                <input type="email" name="email" id="login-email" placeholder=" " required autofocus>
+                <label for="login-email">Email</label>
+              </div>
+              <div class="float-field">
+                <input type="password" name="password" id="login-password" placeholder=" " required>
+                <label for="login-password">Password</label>
+              </div>
               <button type="submit" style="width: 100%;">Sign In →</button>
             </form>
             <p style="text-align: center; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
@@ -108,9 +108,13 @@ async function buildApp(opts = {}) {
 
     app.post('/login', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { email, password } = request.body || {};
+      const isAjax = request.headers['x-requested-with'] === 'XMLHttpRequest';
 
       const admin = await app.db.getOne('SELECT * FROM admin WHERE email = $1', [email]);
       if (!admin || !(await bcrypt.compare(password || '', admin.password_hash))) {
+        if (isAjax) {
+          return reply.code(401).send({ error: 'Invalid email or password. Please try again.' });
+        }
         const token = reply.generateCsrf();
         return reply.type('text/html').send(BASE_LAYOUT('Login', `
           <div class="login-card">
@@ -123,14 +127,14 @@ async function buildApp(opts = {}) {
               </div>
               <form method="POST" action="/admin/login">
                 <input type="hidden" name="_csrf" value="${token}">
-                <label>
-                  Email
-                  <input type="email" name="email" placeholder="Enter your email" value="${escapeHtml(email || '')}" required autofocus>
-                </label>
-                <label>
-                  Password
-                  <input type="password" name="password" placeholder="Enter your password" required>
-                </label>
+                <div class="float-field">
+                  <input type="email" name="email" id="login-email" placeholder=" " value="${escapeHtml(email || '')}" required autofocus>
+                  <label for="login-email">Email</label>
+                </div>
+                <div class="float-field">
+                  <input type="password" name="password" id="login-password" placeholder=" " required>
+                  <label for="login-password">Password</label>
+                </div>
                 <button type="submit" style="width: 100%;">Sign In →</button>
               </form>
               <p style="text-align: center; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
@@ -142,6 +146,9 @@ async function buildApp(opts = {}) {
       }
 
       request.session.set('adminId', admin.id);
+      if (isAjax) {
+        return reply.send({ redirect: '/admin/dashboard' });
+      }
       return reply.redirect('/admin/dashboard');
     });
 
@@ -155,22 +162,22 @@ async function buildApp(opts = {}) {
             <div class="login-subtitle">Create your account to get started.</div>
             <form method="POST" action="/admin/register">
               <input type="hidden" name="_csrf" value="${token}">
-              <label>
-                Email
-                <input type="email" name="email" placeholder="Enter your email" required autofocus>
-              </label>
-              <label>
-                Username
-                <input type="text" name="username" placeholder="Choose a username" required>
-              </label>
-              <label>
-                Password
-                <input type="password" name="password" placeholder="Create a password" required minlength="6">
-              </label>
-              <label>
-                Confirm Password
-                <input type="password" name="confirm_password" placeholder="Confirm your password" required>
-              </label>
+              <div class="float-field">
+                <input type="email" name="email" id="reg-email" placeholder=" " required autofocus>
+                <label for="reg-email">Email</label>
+              </div>
+              <div class="float-field">
+                <input type="text" name="username" id="reg-username" placeholder=" " required>
+                <label for="reg-username">Username</label>
+              </div>
+              <div class="float-field">
+                <input type="password" name="password" id="reg-password" placeholder=" " required minlength="6">
+                <label for="reg-password">Password</label>
+              </div>
+              <div class="float-field">
+                <input type="password" name="confirm_password" id="reg-confirm" placeholder=" " required>
+                <label for="reg-confirm">Confirm Password</label>
+              </div>
               <button type="submit" style="width: 100%;">Create Account →</button>
             </form>
             <p style="text-align: center; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
@@ -183,9 +190,12 @@ async function buildApp(opts = {}) {
 
     app.post('/register', { preHandler: app.csrfProtection }, async (request, reply) => {
       const { email, username, password, confirm_password } = request.body || {};
+      const isAjax = request.headers['x-requested-with'] === 'XMLHttpRequest';
       const token = reply.generateCsrf();
 
-      const renderError = (msg) => reply.type('text/html').send(BASE_LAYOUT('Register', `
+      const renderError = (msg) => {
+        if (isAjax) return reply.code(400).send({ error: msg });
+        return reply.type('text/html').send(BASE_LAYOUT('Register', `
         <div class="login-card">
           <article>
             <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
@@ -218,6 +228,7 @@ async function buildApp(opts = {}) {
           </article>
         </div>
       `));
+      };
 
       if (!email || !username || !password) return renderError('All fields are required.');
       if (password !== confirm_password) return renderError('Passwords do not match.');
@@ -234,6 +245,7 @@ async function buildApp(opts = {}) {
       const result = await app.db.query('INSERT INTO admin (email, username, password_hash, timezone, notification_email) VALUES ($1, $2, $3, $4, $5) RETURNING id', [email, username.trim(), passwordHash, 'UTC', email]);
 
       request.session.set('adminId', result.rows[0].id);
+      if (isAjax) return reply.send({ redirect: '/admin/dashboard' });
       return reply.redirect('/admin/dashboard');
     });
 
@@ -422,6 +434,9 @@ async function buildApp(opts = {}) {
             const endTimeStr = formatterTime.format(end);
             const fullDateStr = start.toLocaleDateString('en-GB', { timeZone: adminTz, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
+            const isPast = end < now;
+            const dotClass = (b.status === 'cancelled' || isPast) ? 'meeting-dot dot-past' : 'meeting-dot dot-upcoming';
+
             const cancelBtn = b.status === 'confirmed'
               ? `<form method="POST" action="/admin/bookings/${b.id}/cancel" style="display:inline; margin:0;" onsubmit="event.preventDefault(); event.stopPropagation(); var f=this; AppModal.confirm('Are you sure you want to cancel this meeting?', function(){f.submit()}, {title:'Cancel Meeting', confirmText:'Cancel Meeting', danger:true, icon:'<i class=\\'ph-fill ph-calendar-x\\' style=\\'font-size:32px;color:var(--error)\\'></i>'}); return false;"><input type="hidden" name="_csrf" value="${token}"><button type="submit" class="icon-btn" title="Cancel Meeting" onclick="event.stopPropagation()"><i class="ph-bold ph-x"></i></button></form>`
               : `<span class="badge error">Cancelled</span>`;
@@ -448,7 +463,7 @@ async function buildApp(opts = {}) {
                   <span class="meeting-duration">${b.duration_minutes} min</span>
                 </div>
                 <div class="meeting-details">
-                  <div class="meeting-dot"></div>
+                  <div class="${dotClass}"></div>
                   <span class="meeting-title">${escapeHtml(b.title || b.profile_name)}</span>
                   <span class="meeting-booker">with ${escapeHtml(b.booker_name)}</span>
                   <span class="meeting-profile">${escapeHtml(b.profile_name)}</span>
@@ -1182,6 +1197,52 @@ async function buildApp(opts = {}) {
           <div class="settings-content">
             <div class="settings-card">
               <div class="settings-card-header">
+                <div class="settings-card-icon"><i class="ph-duotone ph-moon-stars"></i></div>
+                <div>
+                  <h2>Appearance</h2>
+                  <p>Choose your preferred theme for the interface.</p>
+                </div>
+              </div>
+              <div class="theme-switcher">
+                <button type="button" class="theme-option" data-theme="light" onclick="setTheme('light')">
+                  <i class="ph-duotone ph-sun"></i>
+                  <span>Light</span>
+                </button>
+                <button type="button" class="theme-option" data-theme="dark" onclick="setTheme('dark')">
+                  <i class="ph-duotone ph-moon"></i>
+                  <span>Dark</span>
+                </button>
+              </div>
+              <script>
+                function setTheme(theme) {
+                  document.documentElement.style.setProperty('transition', 'background-color 0.4s ease, color 0.3s ease');
+                  document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : '');
+                  if (theme === 'dark') {
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                  } else {
+                    document.documentElement.removeAttribute('data-theme');
+                  }
+                  localStorage.setItem('theme', theme);
+                  document.querySelectorAll('.theme-option').forEach(function(btn) {
+                    btn.classList.toggle('active', btn.dataset.theme === theme);
+                  });
+                  fetch('/admin/settings/theme', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: '_csrf=${token}&theme=' + theme
+                  });
+                  setTimeout(function() { document.documentElement.style.removeProperty('transition'); }, 500);
+                }
+                (function() {
+                  var current = localStorage.getItem('theme') || 'light';
+                  document.querySelectorAll('.theme-option').forEach(function(btn) {
+                    btn.classList.toggle('active', btn.dataset.theme === current);
+                  });
+                })();
+              </script>
+            </div>
+            <div class="settings-card">
+              <div class="settings-card-header">
                 <div class="settings-card-icon"><i class="ph-duotone ph-globe-hemisphere-west"></i></div>
                 <div>
                   <h2>Timezone</h2>
@@ -1243,6 +1304,14 @@ async function buildApp(opts = {}) {
           </div>
         </div>
       `, true, 'settings'));
+    });
+
+    app.post('/settings/theme', { preHandler: app.csrfProtection }, async (request, reply) => {
+      const { theme } = request.body || {};
+      const adminId = request.session.get('adminId');
+      const validTheme = theme === 'dark' ? 'dark' : 'light';
+      await app.db.run('UPDATE admin SET theme = $1 WHERE id = $2', [validTheme, adminId]);
+      return reply.send({ ok: true });
     });
 
     app.post('/settings/timezone', { preHandler: app.csrfProtection }, async (request, reply) => {
