@@ -105,8 +105,8 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
     ? (schedules.writeCalendarIds || []).concat(profile.write_calendar_id ? [profile.write_calendar_id] : [])
     : [];
 
-  const writeCalendarCheckboxes = calendars.map(c =>
-    `<label><input type="checkbox" name="write_calendar_ids[]" value="${c.id}" ${writeCalendarIds.includes(c.id) ? 'checked' : ''}> ${escapeHtml(c.email)} (${c.provider})</label>`
+  const writeCalendarRadios = calendars.map(c =>
+    `<label class="radio-card"><input type="radio" name="write_calendar_id" value="${c.id}" ${writeCalendarIds.includes(c.id) ? 'checked' : ''}><span class="radio-card-content"><i class="ph-fill ph-calendar-check"></i><span class="radio-card-text"><span class="radio-card-email">${escapeHtml(c.email)}</span><span class="radio-card-provider">${c.provider}</span></span></span></label>`
   ).join('');
 
   const readCalendarIds = isEdit
@@ -114,7 +114,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
     : [];
 
   const readCalendarCheckboxes = calendars.map(c =>
-    `<label><input type="checkbox" name="read_calendar_ids[]" value="${c.id}" ${readCalendarIds.includes(c.id) ? 'checked' : ''}> ${escapeHtml(c.email)} (${c.provider})</label>`
+    `<label class="calendar-check-card"><input type="checkbox" name="read_calendar_ids[]" value="${c.id}" ${readCalendarIds.includes(c.id) ? 'checked' : ''}><span class="calendar-check-content"><i class="ph-fill ph-eye"></i><span class="calendar-check-text"><span class="calendar-check-email">${escapeHtml(c.email)}</span><span class="calendar-check-provider">${c.provider}</span></span></span></label>`
   ).join('');
 
   const attendeeJsonArr = JSON.stringify(attendees);
@@ -304,16 +304,30 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <div class="field-group">
-                <span class="field-label">Write Calendars</span>
-                <div class="checkbox-group">
-                  ${writeCalendarCheckboxes || '<p style="color: var(--text-secondary); margin: 0; font-size: 0.875rem;">No calendar connections available.</p>'}
+              <div class="cal-integration-group">
+                <div class="cal-integration-card">
+                  <div class="cal-integration-header">
+                    <i class="ph-fill ph-pencil-simple-line"></i>
+                    <div>
+                      <span class="cal-integration-title">Write Calendar</span>
+                      <span class="cal-integration-desc">New events will be created in this calendar</span>
+                    </div>
+                  </div>
+                  <div class="cal-integration-options">
+                    ${writeCalendarRadios || '<p class="cal-integration-empty"><i class="ph ph-link-break"></i> No calendar connections. <a href="/admin/calendars">Connect one</a></p>'}
+                  </div>
                 </div>
-              </div>
-              <div class="field-group">
-                <span class="field-label">Read Calendars</span>
-                <div class="checkbox-group">
-                  ${readCalendarCheckboxes || '<p style="color: var(--text-secondary); margin: 0; font-size: 0.875rem;">No connections. <a href="/admin/calendars">Connect</a></p>'}
+                <div class="cal-integration-card">
+                  <div class="cal-integration-header">
+                    <i class="ph-fill ph-eye"></i>
+                    <div>
+                      <span class="cal-integration-title">Read Calendars</span>
+                      <span class="cal-integration-desc">Check these for conflicts when booking</span>
+                    </div>
+                  </div>
+                  <div class="cal-integration-options">
+                    ${readCalendarCheckboxes || '<p class="cal-integration-empty"><i class="ph ph-link-break"></i> No connections. <a href="/admin/calendars">Connect one</a></p>'}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1180,9 +1194,10 @@ function registerProfileRoutes(app) {
 
     const buffer_time_minutes = parseInt(request.body.buffer_time_minutes, 10) || 0;
 
+    const writeCalIdDirect = request.body['write_calendar_id'] ? Number(request.body['write_calendar_id']) : null;
     const result = await app.db.query(
       "INSERT INTO booking_profiles (user_id, slug, name, is_active, write_calendar_id, meeting_link_url, meeting_tool, buffer_time_minutes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
-      [adminId, slug, name, true, null, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, new Date().toISOString()]
+      [adminId, slug, name, true, writeCalIdDirect, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, new Date().toISOString()]
     );
 
     const profileId = result.rows[0].id;
@@ -1212,12 +1227,9 @@ function registerProfileRoutes(app) {
       }
     }
 
-    const writeCalIds = request.body['write_calendar_ids[]'];
-    if (writeCalIds) {
-      const wIds = Array.isArray(writeCalIds) ? writeCalIds : [writeCalIds];
-      for (const cid of wIds) {
-        await app.db.run("INSERT INTO profile_write_calendars (profile_id, calendar_connection_id) VALUES ($1, $2)", [profileId, Number(cid)]);
-      }
+    const writeCalId = request.body['write_calendar_id'];
+    if (writeCalId) {
+      await app.db.run("INSERT INTO profile_write_calendars (profile_id, calendar_connection_id) VALUES ($1, $2)", [profileId, Number(writeCalId)]);
     }
 
     const overrides = parseOverridesFromBody(request.body);
@@ -1284,9 +1296,10 @@ function registerProfileRoutes(app) {
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
 
+    const writeCalIdForProfile = request.body['write_calendar_id'] ? Number(request.body['write_calendar_id']) : null;
     await app.db.run(
       "UPDATE booking_profiles SET slug = $1, name = $2, write_calendar_id = $3, meeting_link_url = $4, meeting_tool = $5, buffer_time_minutes = $6 WHERE id = $7",
-      [slug, name, null, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, id]
+      [slug, name, writeCalIdForProfile, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, id]
     );
 
     // Replace attendees
@@ -1314,14 +1327,11 @@ function registerProfileRoutes(app) {
       }
     }
 
-    // Replace write calendars
+    // Replace write calendar (single selection)
     await app.db.run("DELETE FROM profile_write_calendars WHERE profile_id = $1", [id]);
-    const writeCalIds = request.body['write_calendar_ids[]'];
-    if (writeCalIds) {
-      const wIds = Array.isArray(writeCalIds) ? writeCalIds : [writeCalIds];
-      for (const cid of wIds) {
-        await app.db.run("INSERT INTO profile_write_calendars (profile_id, calendar_connection_id) VALUES ($1, $2)", [id, Number(cid)]);
-      }
+    const writeCalId = request.body['write_calendar_id'];
+    if (writeCalId) {
+      await app.db.run("INSERT INTO profile_write_calendars (profile_id, calendar_connection_id) VALUES ($1, $2)", [id, Number(writeCalId)]);
     }
 
     await app.db.run("DELETE FROM schedule_overrides WHERE profile_id = $1", [id]);

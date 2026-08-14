@@ -135,10 +135,14 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
         }
 
         overlay.style.display = 'flex';
+        overlay.style.opacity = '0';
+        requestAnimationFrame(function() { overlay.style.opacity = '1'; });
         (opts.onConfirm ? actions.querySelector('.app-modal-btn-confirm') : cancelBtn).focus();
       },
       hide: function() {
-        document.getElementById('app-modal-overlay').style.display = 'none';
+        var overlay = document.getElementById('app-modal-overlay');
+        overlay.style.opacity = '0';
+        setTimeout(function() { overlay.style.display = 'none'; overlay.style.opacity = ''; }, 180);
       },
       confirm: function(message, callback, opts) {
         opts = opts || {};
@@ -175,6 +179,8 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
 
       function openOverlay(url) {
         overlay.style.display = 'flex';
+        overlay.style.opacity = '0';
+        requestAnimationFrame(function() { overlay.style.opacity = '1'; });
         content.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:64px;"><i class="ph-bold ph-spinner loading" style="font-size:24px;opacity:0.5;"></i></div>';
         document.body.style.overflow = 'hidden';
         fetch(url)
@@ -191,9 +197,13 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
       }
 
       function closeOverlay() {
-        overlay.style.display = 'none';
-        content.innerHTML = '';
-        document.body.style.overflow = '';
+        overlay.style.opacity = '0';
+        setTimeout(function() {
+          overlay.style.display = 'none';
+          overlay.style.opacity = '';
+          content.innerHTML = '';
+          document.body.style.overflow = '';
+        }, 200);
       }
 
       document.addEventListener('click', function(e) {
