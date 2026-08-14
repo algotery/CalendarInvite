@@ -273,6 +273,9 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
     const meetingTool = profile.meeting_tool === 'meet' ? 'Google Meet' : profile.meeting_tool === 'teams' ? 'Microsoft Teams' : 'Phone call';
     const meetingIcon = profile.meeting_tool === 'meet' ? 'ph-video-camera' : profile.meeting_tool === 'teams' ? 'ph-video-camera' : 'ph-phone';
 
+    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [profile.user_id]);
+    const bookingTimeFormat = (adminRow && adminRow.time_format) || '12h';
+
     const availableDaysRows = await app.db.getAll("SELECT DISTINCT day_of_week FROM schedule_templates WHERE profile_id = $1", [profile.id]);
     const availableDays = availableDaysRows.map(r => r.day_of_week);
 
@@ -401,6 +404,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
           const slug = '${escapeHtml(slug)}';
           const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
           const availableDays = ${JSON.stringify(availableDays)};
+          const BOOKING_TIME_FORMAT = '${bookingTimeFormat}';
           var selectedDuration = 30;
           let selectedSlotStart = null;
           let selectedDateStr = null;
@@ -451,7 +455,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
                   return;
                 }
                 var renderedSlots = data.slots.map(function(s) {
-                  var t = new Date(s.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz });
+                  var t = new Date(s.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: BOOKING_TIME_FORMAT !== '24h', timeZone: tz });
                   return '<button class="booking-slot-btn" data-start="' + s.start + '" data-time="' + t + '">' + t + '</button>';
                 });
                 container.innerHTML = renderedSlots.join('');
@@ -630,7 +634,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               hideBackButton();
               var stepIndicator = document.getElementById('step-indicator');
               if (stepIndicator) stepIndicator.style.display = 'none';
-              var startLocal = new Date(b.start_time).toLocaleString(undefined, { timeZone: tz, dateStyle: 'full', timeStyle: 'short' });
+              var startLocal = new Date(b.start_time).toLocaleString(undefined, { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: BOOKING_TIME_FORMAT !== '24h' });
               var details = '<div style="background: #f5f5f5; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: left;">';
               details += '<h3 style="margin-top: 0; font-size: 1.125rem;">' + esc(b.title) + '</h3>';
               details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-calendar" style="font-size: 1.25rem; color: #4a4a4a;"></i><span>' + esc(startLocal) + '</span></div>';
@@ -952,10 +956,12 @@ function registerCancellationPage(app, { encryptionKey, baseLayout }) {
       return reply.type('text/html').send(baseLayout('Already Cancelled', `<div style="text-align: center; padding: 4rem 0;"><article style="max-width: 500px; margin: 0 auto;"><h1 style="color: var(--text-secondary);">Already Cancelled</h1><p>This booking has already been cancelled.</p><a href="/" role="button" class="secondary">Go Home</a></article></div>`));
     }
 
+    const profileOwner = await app.db.getOne('SELECT a.time_format FROM admin a JOIN booking_profiles bp ON bp.user_id = a.id WHERE bp.id = $1', [booking.profile_id]);
+    const cancelTimeFormat = (profileOwner && profileOwner.time_format) || '12h';
     const startDate = new Date(booking.start_time);
     const endDate = new Date(booking.end_time);
-    const startLocal = startDate.toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' });
-    const endLocal = endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const startLocal = startDate.toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: cancelTimeFormat !== '24h' });
+    const endLocal = endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: cancelTimeFormat !== '24h' });
     const attendees = [booking.booker_email];
     if (booking.additional_attendees) { try { attendees.push(...JSON.parse(booking.additional_attendees)); } catch {} }
 

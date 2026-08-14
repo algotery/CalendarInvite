@@ -255,8 +255,9 @@ async function buildApp(opts = {}) {
     app.get('/dashboard', async (request, reply) => {
       const token = reply.generateCsrf();
       const adminId = request.session.get('adminId');
-      const admin = await app.db.getOne('SELECT timezone FROM admin WHERE id = $1', [adminId]);
+      const admin = await app.db.getOne('SELECT timezone, time_format FROM admin WHERE id = $1', [adminId]);
       const adminTz = admin ? admin.timezone : 'UTC';
+      const adminTimeFormat = admin ? (admin.time_format || '12h') : '12h';
 
       const activeProfiles = await app.db.getOne("SELECT COUNT(*) as count FROM booking_profiles WHERE is_active = true AND user_id = $1", [adminId]);
       const now = new Date().toISOString();
@@ -269,7 +270,7 @@ async function buildApp(opts = {}) {
       const next5Cards = next5.map(b => {
         const start = new Date(b.start_time);
         const dateStr = start.toLocaleString('en-US', { timeZone: adminTz, dateStyle: 'medium' });
-        const timeStr = start.toLocaleString('en-US', { timeZone: adminTz, timeStyle: 'short' });
+        const timeStr = start.toLocaleString('en-US', { timeZone: adminTz, hour: '2-digit', minute: '2-digit', hour12: adminTimeFormat !== '24h' });
         return `
           <div class="dashboard-booking-card">
             <div class="dashboard-booking-time">
@@ -334,8 +335,9 @@ async function buildApp(opts = {}) {
     app.get('/bookings', async (request, reply) => {
       const token = reply.generateCsrf();
       const adminId = request.session.get('adminId');
-      const admin = await app.db.getOne('SELECT timezone FROM admin WHERE id = $1', [adminId]);
+      const admin = await app.db.getOne('SELECT timezone, time_format FROM admin WHERE id = $1', [adminId]);
       const adminTz = admin ? admin.timezone : 'UTC';
+      const adminTimeFormat = admin ? (admin.time_format || '12h') : '12h';
 
       const { status, profile_id, filter, view } = request.query;
       const activeView = view || 'list';
@@ -391,7 +393,7 @@ async function buildApp(opts = {}) {
       });
 
       const formatterDate = new Intl.DateTimeFormat('en-GB', { timeZone: adminTz, weekday: 'short', day: 'numeric', month: 'short' });
-      const formatterTime = new Intl.DateTimeFormat('en-GB', { timeZone: adminTz, hour: '2-digit', minute: '2-digit', hour12: false });
+      const formatterTime = new Intl.DateTimeFormat('en-US', { timeZone: adminTz, hour: '2-digit', minute: '2-digit', hour12: adminTimeFormat !== '24h' });
 
       const grouped = {};
       const todayStr = formatterDate.format(now).replace(',', '');
@@ -1178,7 +1180,7 @@ async function buildApp(opts = {}) {
 
     app.get('/settings', async (request, reply) => {
       const adminId = request.session.get('adminId');
-      const admin = await app.db.getOne('SELECT timezone, notification_email FROM admin WHERE id = $1', [adminId]);
+      const admin = await app.db.getOne('SELECT timezone, notification_email, time_format FROM admin WHERE id = $1', [adminId]);
       const token = reply.generateCsrf();
       const flash = request.session.get('flash') || '';
       request.session.set('flash', '');
@@ -1257,6 +1259,39 @@ async function buildApp(opts = {}) {
                 </div>
                 <button type="submit" class="settings-save-btn">Save Timezone</button>
               </form>
+            </div>
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div class="settings-card-icon"><i class="ph-duotone ph-clock"></i></div>
+                <div>
+                  <h2>Time Format</h2>
+                  <p>Choose how times are displayed throughout the app.</p>
+                </div>
+              </div>
+              <div class="time-format-switcher">
+                <button type="button" class="time-format-option${(admin.time_format || '12h') === '12h' ? ' active' : ''}" data-format="12h" onclick="setTimeFormat('12h')">
+                  <span class="time-format-example">2:30 PM</span>
+                  <span>12-hour</span>
+                </button>
+                <button type="button" class="time-format-option${(admin.time_format || '12h') === '24h' ? ' active' : ''}" data-format="24h" onclick="setTimeFormat('24h')">
+                  <span class="time-format-example">14:30</span>
+                  <span>24-hour</span>
+                </button>
+              </div>
+              <script>
+                function setTimeFormat(format) {
+                  document.querySelectorAll('.time-format-option').forEach(function(btn) {
+                    btn.classList.toggle('active', btn.dataset.format === format);
+                  });
+                  localStorage.setItem('timeFormat', format);
+                  fetch('/admin/settings/time-format', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: '_csrf=${token}&time_format=' + format
+                  }).then(function() { Toast.show('Time format updated', 'success'); });
+                }
+                localStorage.setItem('timeFormat', '${(admin.time_format || '12h')}');
+              </script>
             </div>
             <div class="settings-card">
               <div class="settings-card-header">
@@ -1363,6 +1398,14 @@ async function buildApp(opts = {}) {
       await app.db.run('UPDATE admin SET notification_email = $1 WHERE id = $2', [email, adminId]);
       request.session.set('flash', email ? 'Notification email saved' : 'Notification email removed');
       return reply.redirect('/admin/settings');
+    });
+
+    app.post('/settings/time-format', { preHandler: app.csrfProtection }, async (request, reply) => {
+      const { time_format } = request.body || {};
+      const adminId = request.session.get('adminId');
+      const validFormat = time_format === '24h' ? '24h' : '12h';
+      await app.db.run('UPDATE admin SET time_format = $1 WHERE id = $2', [validFormat, adminId]);
+      return reply.send({ ok: true });
     });
   }, { prefix: '/admin' });
 

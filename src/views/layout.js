@@ -92,12 +92,14 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
     document.addEventListener('DOMContentLoaded', () => {
       if (typeof flatpickr !== 'undefined') {
         window.initTimePickers = function() {
+          var tf = (typeof APP_TIME_FORMAT !== 'undefined') ? APP_TIME_FORMAT : (localStorage.getItem('timeFormat') || '12h');
           flatpickr(".time-picker:not(.flatpickr-input)", {
             enableTime: true,
             noCalendar: true,
             dateFormat: "H:i",
             altInput: true,
-            altFormat: "h:i K",
+            altFormat: tf === '24h' ? "H:i" : "h:i K",
+            time_24hr: tf === '24h',
             minuteIncrement: 1
           });
         };

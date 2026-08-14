@@ -121,6 +121,7 @@ async function createDatabase(connectionString) {
   await pool.query(SCHEMA_SQL);
 
   await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'light'`).catch(() => {});
+  await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS time_format TEXT NOT NULL DEFAULT '12h'`).catch(() => {});
 
   return {
     async query(text, params) {

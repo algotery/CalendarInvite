@@ -92,7 +92,7 @@ function parseOverridesFromBody(body) {
 }
 
 
-function profileFormHtml(token, profile, calendars, attendees, schedules, error, overrides, adminTimezone = 'UTC') {
+function profileFormHtml(token, profile, calendars, attendees, schedules, error, overrides, adminTimezone = 'UTC', timeFormat = '12h') {
   const isEdit = !!profile;
   const action = isEdit ? `/admin/profiles/${profile.id}` : '/admin/profiles';
   const title = isEdit ? 'Edit Profile' : 'New Profile';
@@ -131,6 +131,9 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
 
   function formatTimeLabel(val) {
     const [h, m] = val.split(':').map(Number);
+    if (timeFormat === '24h') {
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
     const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
     const ampm = h < 12 ? 'AM' : 'PM';
     return `${String(hour12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
@@ -216,18 +219,17 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             <div class="modal-section-header" onclick="toggleSection(this)">
               <div>
                 <h3 class="modal-section-title">Profile Settings</h3>
-                <p class="modal-section-summary">${slugSummary}</p>
               </div>
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <div class="field-group">
-                <span class="field-label">Slug</span>
-                <input type="text" name="slug" value="${escapeHtml(profile?.slug || '')}" placeholder="my-meeting" required>
+              <div class="float-field">
+                <input type="text" name="slug" value="${escapeHtml(profile?.slug || '')}" placeholder=" " required>
+                <label>Slug</label>
               </div>
-              <div class="field-group">
-                <span class="field-label">Display Name</span>
-                <input type="text" name="name" value="${escapeHtml(profile?.name || '')}" placeholder="30 Min Meeting" required>
+              <div class="float-field">
+                <input type="text" name="name" value="${escapeHtml(profile?.name || '')}" placeholder=" " required>
+                <label>Display Name</label>
               </div>
             </div>
           </div>
@@ -237,7 +239,6 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             <div class="modal-section-header" onclick="toggleSection(this)">
               <div>
                 <h3 class="modal-section-title">Duration & Buffer</h3>
-                <p class="modal-section-summary">${bufferSummary}</p>
               </div>
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
@@ -274,14 +275,13 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             <div class="modal-section-header" onclick="toggleSection(this)">
               <div>
                 <h3 class="modal-section-title">Meeting Location</h3>
-                <p class="modal-section-summary">${locationSummary}</p>
               </div>
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <div class="field-group">
-                <span class="field-label">Meeting Link</span>
-                <input type="url" name="meeting_link_url" value="${escapeHtml(profile?.meeting_link_url || '')}" placeholder="https://meet.google.com/abc-defg-hij">
+              <div class="float-field">
+                <input type="url" name="meeting_link_url" value="${escapeHtml(profile?.meeting_link_url || '')}" placeholder=" ">
+                <label>Meeting Link</label>
               </div>
               <div class="field-group">
                 <span class="field-label">Meeting Tool</span>
@@ -299,7 +299,6 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             <div class="modal-section-header" onclick="toggleSection(this)">
               <div>
                 <h3 class="modal-section-title">Calendar Integration</h3>
-                <p class="modal-section-summary">${calendarSummary}</p>
               </div>
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
@@ -338,7 +337,6 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             <div class="modal-section-header" onclick="toggleSection(this)">
               <div>
                 <h3 class="modal-section-title">Availability</h3>
-                <p class="modal-section-summary">${availabilitySummary}</p>
               </div>
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
@@ -352,7 +350,6 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             <div class="modal-section-header" onclick="toggleSection(this)">
               <div>
                 <h3 class="modal-section-title">Schedule Overrides</h3>
-                <p class="modal-section-summary">${overrideSummary}</p>
               </div>
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
@@ -424,15 +421,11 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             <div class="modal-section-header" onclick="toggleSection(this)">
               <div>
                 <h3 class="modal-section-title">Default Attendees</h3>
-                <p class="modal-section-summary">${attendeeSummary}</p>
               </div>
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <div class="field-group">
-                <span class="field-label">Emails</span>
-                ${attendeeInputs}
-              </div>
+              ${attendeeInputs}
             </div>
           </div>
         </form>
@@ -454,13 +447,20 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
       </div>
     </div>
     <script>
+      var APP_TIME_FORMAT = '${timeFormat}';
       function toggleSection(header) {
         const section = header.closest('.modal-section');
+        const wasOpen = section.classList.contains('open');
         section.classList.toggle('open');
+        if (!wasOpen) {
+          setTimeout(function() {
+            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 80);
+        }
       }
 
       (function() {
-        flatpickr('.time-picker-override', { enableTime: true, noCalendar: true, dateFormat: "H:i", time_24hr: true });
+        flatpickr('.time-picker-override', { enableTime: true, noCalendar: true, dateFormat: "H:i", time_24hr: APP_TIME_FORMAT === '24h' });
 
         document.getElementById('new_override_type').addEventListener('change', (e) => {
           document.getElementById('new_override_custom').style.display = e.target.value === 'custom' ? 'flex' : 'none';
@@ -531,9 +531,14 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             for (let h = 0; h < 24; h++) {
               for (let m = 0; m < 60; m += 15) {
                 const val = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
-                const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-                const ampm = h < 12 ? 'AM' : 'PM';
-                const label = String(hour12).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+                var label;
+                if (APP_TIME_FORMAT === '24h') {
+                  label = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+                } else {
+                  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                  const ampm = h < 12 ? 'AM' : 'PM';
+                  label = String(hour12).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+                }
                 slots.push({ val, label });
               }
             }
@@ -813,6 +818,8 @@ function registerProfileRoutes(app) {
     `}));
 
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
+    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [adminId]);
+    const timeFormat = (adminRow && adminRow.time_format) || '12h';
     const defaultSchedules = await app.db.getAll(
       "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = $1 ORDER BY day_of_week, start_time",
       [adminId]
@@ -822,9 +829,14 @@ function registerProfileRoutes(app) {
 
     function buildDefaultTimeDropdown(name, selectedValue, disabled) {
       const [h, m] = selectedValue.split(':').map(Number);
-      const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-      const ampm = h < 12 ? 'AM' : 'PM';
-      const label = `${String(hour12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+      let label;
+      if (timeFormat === '24h') {
+        label = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      } else {
+        const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+        const ampm = h < 12 ? 'AM' : 'PM';
+        label = `${String(hour12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+      }
       const disabledAttr = disabled ? ' disabled' : '';
       return `<div class="time-dropdown${disabled ? ' disabled' : ''}"><input type="hidden" name="${name}" value="${selectedValue}"${disabledAttr}><button type="button" class="time-dropdown-trigger"${disabledAttr}><span class="time-dropdown-value">${label}</span><i class="ph ph-caret-down"></i></button></div>`;
     }
@@ -962,15 +974,21 @@ function registerProfileRoutes(app) {
         });
 
         // Custom time dropdown logic for default availability
+        var APP_TIME_FORMAT = '${timeFormat}';
         window.TimeDropdown = window.TimeDropdown || {
           timeSlots: (function() {
             const slots = [];
             for (let h = 0; h < 24; h++) {
               for (let m = 0; m < 60; m += 15) {
                 const val = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
-                const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-                const ampm = h < 12 ? 'AM' : 'PM';
-                const label = String(hour12).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+                var label;
+                if (APP_TIME_FORMAT === '24h') {
+                  label = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+                } else {
+                  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                  const ampm = h < 12 ? 'AM' : 'PM';
+                  label = String(hour12).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+                }
                 slots.push({ val, label });
               }
             }
@@ -1160,11 +1178,13 @@ function registerProfileRoutes(app) {
     const adminId = request.session.get('adminId');
     const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
+    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [adminId]);
+    const timeFormat = (adminRow && adminRow.time_format) || '12h';
     const defaultTemplates = await app.db.getAll(
       "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = $1 ORDER BY day_of_week, start_time",
       [adminId]
     );
-    const html = profileFormHtml(token, null, calendars, [], { templates: defaultTemplates, readCalendarIds: [] }, null, [], adminTimezone);
+    const html = profileFormHtml(token, null, calendars, [], { templates: defaultTemplates, readCalendarIds: [] }, null, [], adminTimezone, timeFormat);
     if (request.query.partial === '1') {
       return reply.type('text/html').send(html);
     }
@@ -1174,11 +1194,13 @@ function registerProfileRoutes(app) {
   app.post('/profiles', { preHandler: app.csrfProtection }, async (request, reply) => {
     const { slug, name, meeting_link_url, meeting_tool } = request.body || {};
     const adminId = request.session.get('adminId');
+    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [adminId]);
+    const timeFormat = (adminRow && adminRow.time_format) || '12h';
 
     if (!slug || !SLUG_REGEX.test(slug)) {
       const token = reply.generateCsrf();
       const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
-      const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.');
+      const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.', [], 'UTC', timeFormat);
       if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
     }
@@ -1187,7 +1209,7 @@ function registerProfileRoutes(app) {
     if (existing) {
       const token = reply.generateCsrf();
       const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
-      const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'That slug already exists. Please choose a different one.');
+      const html = profileFormHtml(token, null, calendars, [], { templates: [], readCalendarIds: [] }, 'That slug already exists. Please choose a different one.', [], 'UTC', timeFormat);
       if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('New Profile', html, true, 'profiles'));
     }
@@ -1256,8 +1278,10 @@ function registerProfileRoutes(app) {
     const writeCalendarIds = (await app.db.getAll("SELECT calendar_connection_id FROM profile_write_calendars WHERE profile_id = $1", [profile.id])).map(r => r.calendar_connection_id);
     const overrides = await app.db.getAll("SELECT * FROM schedule_overrides WHERE profile_id = $1 ORDER BY date", [profile.id]);
     const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
+    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [adminId]);
+    const timeFormat = (adminRow && adminRow.time_format) || '12h';
 
-    const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds, writeCalendarIds }, null, overrides, adminTimezone);
+    const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds, writeCalendarIds }, null, overrides, adminTimezone, timeFormat);
     if (request.query.partial === '1') {
       return reply.type('text/html').send(html);
     }
@@ -1274,13 +1298,15 @@ function registerProfileRoutes(app) {
 
     const { slug, name, meeting_link_url, meeting_tool } = request.body || {};
     const buffer_time_minutes = parseInt(request.body.buffer_time_minutes, 10) || 0;
+    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [adminId]);
+    const timeFormat = (adminRow && adminRow.time_format) || '12h';
 
     if (!slug || !SLUG_REGEX.test(slug)) {
       const token = reply.generateCsrf();
       const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
       const attendees = (await app.db.getAll("SELECT email FROM default_attendees WHERE profile_id = $1", [profile.id])).map(a => a.email);
       const templates = await app.db.getAll("SELECT * FROM schedule_templates WHERE profile_id = $1", [profile.id]);
-      const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.');
+      const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'Slug must be lowercase alphanumeric and hyphens only.', [], 'UTC', timeFormat);
       if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
@@ -1291,7 +1317,7 @@ function registerProfileRoutes(app) {
       const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
       const attendees = (await app.db.getAll("SELECT email FROM default_attendees WHERE profile_id = $1", [profile.id])).map(a => a.email);
       const templates = await app.db.getAll("SELECT * FROM schedule_templates WHERE profile_id = $1", [profile.id]);
-      const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'That slug already exists.');
+      const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds: [] }, 'That slug already exists.', [], 'UTC', timeFormat);
       if (request.query.partial === '1') return reply.type('text/html').send(html);
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
