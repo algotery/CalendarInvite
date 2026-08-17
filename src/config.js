@@ -18,7 +18,6 @@ const config = Object.freeze({
   env: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT, 10) || 3000,
   host: process.env.HOST || '0.0.0.0',
-  adminTimezone: process.env.ADMIN_TIMEZONE || 'UTC',
   databaseUrl: process.env.DATABASE_URL,
   encryptionKey: process.env.TOKEN_ENCRYPTION_KEY,
   sessionSecret: process.env.SESSION_SECRET,

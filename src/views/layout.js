@@ -57,7 +57,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
   <meta charset="utf-8">
   ${isBookingPage ? '<meta name="booking-page" content="1">' : ''}
   <script>
-    (function(){if(document.querySelector('meta[name="booking-page"]'))return;var t=localStorage.getItem('theme');if(t==='dark')document.documentElement.setAttribute('data-theme','dark');})();
+    (function(){var isBooking=document.querySelector('meta[name="booking-page"]');var key=isBooking?'booking-theme':'theme';var t=localStorage.getItem(key);if(t==='dark')document.documentElement.setAttribute('data-theme','dark');})();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title} - CalendarInvite</title>

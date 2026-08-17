@@ -26,13 +26,14 @@ function getFromAddress() {
   return process.env.SMTP_FROM || process.env.SMTP_USER;
 }
 
-async function sendNewBookingNotification(adminEmail, booking, profileName, cancelUrl) {
+async function sendNewBookingNotification(adminEmail, booking, profileName, cancelUrl, adminTimezone) {
   const t = getTransporter();
   if (!t || !adminEmail) return;
 
+  const tz = adminTimezone || 'UTC';
   const startDate = new Date(booking.start_time);
-  const dateStr = startDate.toLocaleDateString('tr-TR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const timeStr = startDate.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  const dateStr = startDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz });
+  const timeStr = startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: tz });
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 0;">
@@ -83,13 +84,14 @@ async function sendNewBookingNotification(adminEmail, booking, profileName, canc
   });
 }
 
-async function sendBookingCancelledNotification(bookerEmail, booking, profileName) {
+async function sendBookingCancelledNotification(bookerEmail, booking, profileName, bookerTimezone) {
   const t = getTransporter();
   if (!t || !bookerEmail) return;
 
+  const tz = bookerTimezone || 'UTC';
   const startDate = new Date(booking.start_time);
-  const dateStr = startDate.toLocaleDateString('tr-TR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const timeStr = startDate.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  const dateStr = startDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz });
+  const timeStr = startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: tz });
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 0;">

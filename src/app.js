@@ -1251,14 +1251,98 @@ async function buildApp(opts = {}) {
                   <p>Set your default timezone for displaying booking times.</p>
                 </div>
               </div>
-              <form method="POST" action="/admin/settings/timezone" class="settings-form">
+              <form method="POST" action="/admin/settings/timezone" class="settings-form" id="tz-form">
                 <input type="hidden" name="_csrf" value="${token}">
+                <input type="hidden" name="timezone" id="tz-hidden" value="${admin.timezone || 'UTC'}">
                 <div class="field-group">
                   <label class="field-label">Select your timezone</label>
-                  <select name="timezone" class="settings-select">${timezoneOptions}</select>
+                  <div class="tz-picker" id="tz-picker">
+                    <button type="button" class="tz-picker-btn" id="tz-picker-btn">
+                      <i class="ph ph-globe-hemisphere-west"></i>
+                      <span class="tz-picker-value" id="tz-picker-value">${admin.timezone || 'UTC'}</span>
+                      <i class="ph ph-caret-down tz-picker-caret"></i>
+                    </button>
+                    <div class="tz-picker-dropdown" id="tz-picker-dropdown" style="display:none">
+                      <div class="tz-picker-search">
+                        <i class="ph ph-magnifying-glass"></i>
+                        <input type="text" placeholder="Search timezone..." id="tz-search-input" autocomplete="off">
+                      </div>
+                      <div class="tz-picker-list" id="tz-picker-list"></div>
+                    </div>
+                  </div>
                 </div>
                 <button type="submit" class="settings-save-btn">Save Timezone</button>
               </form>
+              <script>
+              (function(){
+                var ZONES = ${JSON.stringify(TIMEZONES)};
+                var current = '${admin.timezone || 'UTC'}';
+                var picker = document.getElementById('tz-picker');
+                var btn = document.getElementById('tz-picker-btn');
+                var dropdown = document.getElementById('tz-picker-dropdown');
+                var list = document.getElementById('tz-picker-list');
+                var searchInput = document.getElementById('tz-search-input');
+                var hidden = document.getElementById('tz-hidden');
+                var valueEl = document.getElementById('tz-picker-value');
+
+                function formatTz(tz) {
+                  try {
+                    var now = new Date();
+                    var fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' });
+                    var parts = fmt.formatToParts(now);
+                    var offset = parts.find(function(p){ return p.type === 'timeZoneName'; });
+                    return offset ? tz + ' (' + offset.value + ')' : tz;
+                  } catch(e) { return tz; }
+                }
+
+                function render(filter) {
+                  var q = (filter || '').toLowerCase();
+                  var html = '';
+                  ZONES.forEach(function(tz) {
+                    if (q && tz.toLowerCase().indexOf(q) === -1) return;
+                    var active = tz === current ? ' active' : '';
+                    html += '<button type="button" class="tz-picker-option' + active + '" data-tz="' + tz + '">' + formatTz(tz) + '</button>';
+                  });
+                  list.innerHTML = html || '<div class="tz-picker-empty">No results</div>';
+                }
+
+                function open() {
+                  dropdown.style.display = '';
+                  btn.classList.add('open');
+                  searchInput.value = '';
+                  render('');
+                  requestAnimationFrame(function(){ searchInput.focus(); });
+                }
+
+                function close() {
+                  dropdown.style.display = 'none';
+                  btn.classList.remove('open');
+                }
+
+                btn.addEventListener('click', function() {
+                  dropdown.style.display === 'none' ? open() : close();
+                });
+
+                searchInput.addEventListener('input', function() { render(this.value); });
+
+                list.addEventListener('click', function(e) {
+                  var opt = e.target.closest('.tz-picker-option');
+                  if (!opt) return;
+                  current = opt.dataset.tz;
+                  hidden.value = current;
+                  valueEl.textContent = current;
+                  close();
+                });
+
+                document.addEventListener('click', function(e) {
+                  if (!picker.contains(e.target)) close();
+                });
+
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape') close();
+                });
+              })();
+              </script>
             </div>
             <div class="settings-card">
               <div class="settings-card-header">

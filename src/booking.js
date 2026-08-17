@@ -5,6 +5,7 @@ const { createMicrosoftClient } = require('./microsoft');
 const { getZohoClient } = require('./zoho');
 const { optimizedCleanupOldRateLimits } = require('./performance-fixes');
 const { sendNewBookingNotification, sendBookingCancelledNotification } = require('./mailer');
+const { TIMEZONES } = require('./views/layout');
 
 async function getValidTokenForConnection(db, encryptionKey, connection) {
   const expiry = new Date(connection.token_expiry || 0);
@@ -280,16 +281,45 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
     const availableDays = availableDaysRows.map(r => r.day_of_week);
 
     reply.type('text/html').send(baseLayout(`Book - ${escapeHtml(profile.name)}`, `
-      <div class="booking-page-container">
-        <!-- Step Indicator -->
-        <div class="step-indicator" id="step-indicator">
-          <div class="step-item active" data-step="1"><div class="step-number">1</div><div class="step-label">Date</div></div>
-          <div class="step-line"></div>
-          <div class="step-item" data-step="2"><div class="step-number">2</div><div class="step-label">Time</div></div>
-          <div class="step-line"></div>
-          <div class="step-item" data-step="3"><div class="step-number">3</div><div class="step-label">Details</div></div>
+      <header class="booking-header">
+        <div class="booking-header-left">
+          <a href="/" class="booking-header-logo">
+            <span class="booking-header-powered">POWERED BY</span>
+            <img src="/img/icon.svg" alt="" class="booking-header-logo-icon">
+            <img src="/img/wordmark.svg" alt="Lumi" class="booking-header-logo-wordmark">
+          </a>
         </div>
+        <div class="booking-header-center">
+          <div class="booking-steps" id="step-indicator">
+            <div class="booking-step active" data-step="1">
+              <div class="booking-step-dot"></div>
+              <span class="booking-step-label">Date</span>
+            </div>
+            <div class="booking-step-connector"></div>
+            <div class="booking-step" data-step="2">
+              <div class="booking-step-dot"></div>
+              <span class="booking-step-label">Time</span>
+            </div>
+            <div class="booking-step-connector"></div>
+            <div class="booking-step" data-step="3">
+              <div class="booking-step-dot"></div>
+              <span class="booking-step-label">Details</span>
+            </div>
+          </div>
+        </div>
+        <div class="booking-header-right">
+          <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+            <div class="theme-toggle-track">
+              <div class="theme-toggle-thumb">
+                <i class="ph-fill ph-sun theme-icon-sun"></i>
+                <i class="ph-fill ph-moon theme-icon-moon"></i>
+              </div>
+            </div>
+          </button>
+        </div>
+      </header>
 
+      <div class="booking-page-container">
         <!-- Two Column Layout -->
         <div class="booking-layout">
           <!-- Left Panel -->
@@ -339,6 +369,20 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
                     <div class="busyness-legend-item"><div class="busyness-legend-dot dot-medium"></div><span>Filling up</span></div>
                     <div class="busyness-legend-item"><div class="busyness-legend-dot dot-high"></div><span>Almost full</span></div>
                     <div class="busyness-legend-item"><div class="busyness-legend-dot dot-none"></div><span>Unavailable</span></div>
+                  </div>
+                  <div class="booking-timezone-picker" id="timezone-picker">
+                    <button type="button" class="booking-timezone-btn" id="timezone-btn">
+                      <i class="ph ph-globe"></i>
+                      <span id="timezone-label"></span>
+                      <i class="ph ph-caret-down timezone-caret"></i>
+                    </button>
+                    <div class="booking-timezone-dropdown" id="timezone-dropdown" style="display:none;">
+                      <div class="booking-timezone-search">
+                        <i class="ph ph-magnifying-glass"></i>
+                        <input type="text" id="timezone-search" placeholder="Search timezone..." autocomplete="off">
+                      </div>
+                      <div class="booking-timezone-list" id="timezone-list"></div>
+                    </div>
                   </div>
                 </div>
 
@@ -402,21 +446,104 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
       <script>
         (function() {
           const slug = '${escapeHtml(slug)}';
-          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          let tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
           const availableDays = ${JSON.stringify(availableDays)};
           const BOOKING_TIME_FORMAT = '${bookingTimeFormat}';
           var selectedDuration = 30;
           let selectedSlotStart = null;
           let selectedDateStr = null;
 
+          const TIMEZONE_LIST = (function() {
+            var list = ${JSON.stringify(TIMEZONES)};
+            if (list.indexOf(tz) === -1) list = [tz].concat(list);
+            return list;
+          })();
+          const tzLabel = document.getElementById('timezone-label');
+          const tzBtn = document.getElementById('timezone-btn');
+          const tzDropdown = document.getElementById('timezone-dropdown');
+          const tzSearch = document.getElementById('timezone-search');
+          const tzList = document.getElementById('timezone-list');
+
+          function formatTzDisplay(tzName) {
+            try {
+              const now = new Date();
+              const formatter = new Intl.DateTimeFormat('en-US', { timeZone: tzName, timeZoneName: 'shortOffset' });
+              const parts = formatter.formatToParts(now);
+              const offset = parts.find(p => p.type === 'timeZoneName');
+              return tzName.replace(/_/g, ' ').replace(/\\//g, ' / ') + (offset ? ' (' + offset.value + ')' : '');
+            } catch { return tzName; }
+          }
+
+          function renderTzList(filter) {
+            const q = (filter || '').toLowerCase();
+            const filtered = TIMEZONE_LIST.filter(function(t) { return t.toLowerCase().indexOf(q) !== -1; });
+            tzList.innerHTML = filtered.map(function(t) {
+              var active = t === tz ? ' active' : '';
+              return '<button type="button" class="booking-timezone-option' + active + '" data-tz="' + t + '">' + formatTzDisplay(t) + '</button>';
+            }).join('');
+          }
+
+          function setTimezone(newTz) {
+            tz = newTz;
+            tzLabel.textContent = formatTzDisplay(tz);
+            tzDropdown.style.display = 'none';
+            tzBtn.classList.remove('open');
+            busynessCache = {};
+            fetchBusyness(currentMonth.getFullYear(), currentMonth.getMonth());
+            if (selectedDateStr) loadSlots(selectedDateStr);
+          }
+
+          tzLabel.textContent = formatTzDisplay(tz);
+
+          tzBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var isOpen = tzDropdown.style.display !== 'none';
+            if (isOpen) { tzDropdown.style.display = 'none'; tzBtn.classList.remove('open'); }
+            else { tzDropdown.style.display = 'block'; tzBtn.classList.add('open'); tzSearch.value = ''; renderTzList(''); tzSearch.focus(); }
+          });
+
+          tzSearch.addEventListener('input', function() { renderTzList(this.value); });
+          tzSearch.addEventListener('click', function(e) { e.stopPropagation(); });
+
+          tzList.addEventListener('click', function(e) {
+            var opt = e.target.closest('.booking-timezone-option');
+            if (opt) { setTimezone(opt.dataset.tz); }
+          });
+
+          document.addEventListener('click', function(e) {
+            if (!e.target.closest('#timezone-picker')) { tzDropdown.style.display = 'none'; tzBtn.classList.remove('open'); }
+          });
+
+          // Theme toggle
+          (function() {
+            var toggle = document.getElementById('theme-toggle');
+            var html = document.documentElement;
+            var isDark = html.getAttribute('data-theme') === 'dark';
+            if (isDark) toggle.classList.add('dark');
+
+            toggle.addEventListener('click', function() {
+              isDark = !isDark;
+              html.style.transition = 'all 0.35s';
+              if (isDark) {
+                html.setAttribute('data-theme', 'dark');
+                toggle.classList.add('dark');
+              } else {
+                html.removeAttribute('data-theme');
+                toggle.classList.remove('dark');
+              }
+              localStorage.setItem('booking-theme', isDark ? 'dark' : 'light');
+              setTimeout(function() { html.style.transition = ''; }, 500);
+            });
+          })();
+
           function updateStepIndicator(activeStep) {
-            document.querySelectorAll('.step-item').forEach(function(item) {
+            document.querySelectorAll('.booking-step').forEach(function(item) {
               var step = parseInt(item.dataset.step);
               item.classList.remove('active', 'completed');
               if (step === activeStep) item.classList.add('active');
               else if (step < activeStep) item.classList.add('completed');
             });
-            document.querySelectorAll('.step-line').forEach(function(line, idx) {
+            document.querySelectorAll('.booking-step-connector').forEach(function(line, idx) {
               line.classList.toggle('completed', idx < activeStep - 1);
             });
           }
@@ -635,14 +762,14 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               var stepIndicator = document.getElementById('step-indicator');
               if (stepIndicator) stepIndicator.style.display = 'none';
               var startLocal = new Date(b.start_time).toLocaleString(undefined, { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: BOOKING_TIME_FORMAT !== '24h' });
-              var details = '<div style="background: #f5f5f5; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: left;">';
-              details += '<h3 style="margin-top: 0; font-size: 1.125rem;">' + esc(b.title) + '</h3>';
-              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-calendar" style="font-size: 1.25rem; color: #4a4a4a;"></i><span>' + esc(startLocal) + '</span></div>';
-              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-clock" style="font-size: 1.25rem; color: #4a4a4a;"></i><span>' + b.duration_minutes + ' minutes</span></div>';
-              if (b.meeting_link) { details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-video-camera" style="font-size: 1.25rem; color: #4a4a4a;"></i><a href="' + esc(b.meeting_link) + '" target="_blank" style="color: var(--primary); font-weight: 500;">Join meeting</a></div>'; }
-              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-users" style="font-size: 1.25rem; color: #4a4a4a;"></i><span>' + b.attendees.map(esc).join(', ') + '</span></div>';
+              var details = '<div style="background: var(--neutral-20); border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: left;">';
+              details += '<h3 style="margin-top: 0; font-size: 1.125rem; color: var(--text-primary);">' + esc(b.title) + '</h3>';
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-calendar" style="font-size: 1.25rem; color: var(--text-secondary);"></i><span style="color: var(--text-primary);">' + esc(startLocal) + '</span></div>';
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-clock" style="font-size: 1.25rem; color: var(--text-secondary);"></i><span style="color: var(--text-primary);">' + b.duration_minutes + ' minutes</span></div>';
+              if (b.meeting_link) { details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-video-camera" style="font-size: 1.25rem; color: var(--text-secondary);"></i><a href="' + esc(b.meeting_link) + '" target="_blank" style="color: var(--primary); font-weight: 500;">Join meeting</a></div>'; }
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-users" style="font-size: 1.25rem; color: var(--text-secondary);"></i><span style="color: var(--text-primary);">' + b.attendees.map(esc).join(', ') + '</span></div>';
               details += '</div>';
-              details += '<p style="color: #6b6b6b; font-size: 0.9375rem; text-align: center;">A calendar invitation has been sent to all attendees.</p>';
+              details += '<p style="color: var(--text-secondary); font-size: 0.9375rem; text-align: center;">A calendar invitation has been sent to all attendees.</p>';
               document.getElementById('confirmation-details').innerHTML = details;
             })
             .catch(function() { errDiv.textContent = 'Network error. Please check your connection.'; errDiv.className = 'alert error'; errDiv.style.display = ''; submitBtn.textContent = 'Schedule Event'; submitBtn.disabled = false; });
@@ -912,11 +1039,11 @@ function registerBookingSubmitApi(app, { encryptionKey }) {
 
     await recordEmailBooking(app.db, email.trim(), request.url);
 
-    const admin = await app.db.getOne("SELECT notification_email FROM admin WHERE id = $1", [profile.user_id]);
+    const admin = await app.db.getOne("SELECT notification_email, timezone FROM admin WHERE id = $1", [profile.user_id]);
     if (admin && admin.notification_email) {
       const baseUrl = `${request.protocol}://${request.hostname}${request.port && request.port !== 80 && request.port !== 443 ? ':' + request.port : ''}`;
       const cancelUrl = `${baseUrl}/cancel/${cancellationToken}`;
-      sendNewBookingNotification(admin.notification_email, { title: bookingTitle, booker_name: name.trim(), booker_email: email.trim(), start_time: startDate.toISOString(), duration_minutes: durationMinutes }, profile.name, cancelUrl).catch(() => {});
+      sendNewBookingNotification(admin.notification_email, { title: bookingTitle, booker_name: name.trim(), booker_email: email.trim(), start_time: startDate.toISOString(), duration_minutes: durationMinutes }, profile.name, cancelUrl, admin.timezone || 'UTC').catch(() => {});
     }
 
     return {
@@ -1014,7 +1141,7 @@ function registerCancellationApi(app, { encryptionKey }) {
 
     if (booking.booker_email) {
       const profile = await app.db.getOne("SELECT name FROM booking_profiles WHERE id = $1", [booking.profile_id]);
-      sendBookingCancelledNotification(booking.booker_email, { title: booking.title, start_time: booking.start_time, duration_minutes: booking.duration_minutes }, profile ? profile.name : 'Unknown').catch(() => {});
+      sendBookingCancelledNotification(booking.booker_email, { title: booking.title, start_time: booking.start_time, duration_minutes: booking.duration_minutes }, profile ? profile.name : 'Unknown', 'UTC').catch(() => {});
     }
 
     return reply.redirect(`/cancel/${token}`);

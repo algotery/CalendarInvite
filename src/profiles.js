@@ -11,14 +11,16 @@ function convertUTCToLocalTime(utcTimeStr, adminTimezone) {
   if (!utcTimeStr || utcTimeStr.length === 0) return utcTimeStr;
 
   const [hours, minutes] = utcTimeStr.split(':').map(Number);
-
-  // Create UTC date
-  const now = new Date();
-  const utcDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0));
-
-  // Convert to local time
-  const localHours = String(utcDate.getHours()).padStart(2, '0');
-  const localMinutes = String(utcDate.getMinutes()).padStart(2, '0');
+  const utcDate = new Date(Date.UTC(2024, 0, 1, hours, minutes, 0));
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: adminTimezone || 'UTC',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(utcDate);
+  const localHours = parts.find(p => p.type === 'hour').value;
+  const localMinutes = parts.find(p => p.type === 'minute').value;
 
   return `${localHours}:${localMinutes}`;
 }
@@ -27,16 +29,19 @@ function convertTimeToUTC(timeStr, adminTimezone) {
   if (!timeStr || timeStr.length === 0) return timeStr;
 
   const [hours, minutes] = timeStr.split(':').map(Number);
+  const tz = adminTimezone || 'UTC';
+  const probe = new Date(Date.UTC(2024, 0, 1, 12, 0, 0));
+  const formatter = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  const parts = formatter.formatToParts(probe);
+  const localAtProbe = parseInt(parts.find(p => p.type === 'hour').value, 10);
+  const utcAtProbe = 12;
+  const offsetHours = localAtProbe - utcAtProbe;
 
-  // Create a date in admin's timezone
-  const now = new Date();
-  const localDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0);
+  let utcHours = hours - offsetHours;
+  if (utcHours < 0) utcHours += 24;
+  if (utcHours >= 24) utcHours -= 24;
 
-  // Get UTC time string
-  const utcHours = String(localDate.getUTCHours()).padStart(2, '0');
-  const utcMinutes = String(localDate.getUTCMinutes()).padStart(2, '0');
-
-  return `${utcHours}:${utcMinutes}`;
+  return `${String(utcHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
 function parseScheduleFromBody(body, adminTimezone = 'UTC') {
@@ -817,8 +822,8 @@ function registerProfileRoutes(app) {
       </div>
     `}));
 
-    const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
-    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [adminId]);
+    const adminRow = await app.db.getOne('SELECT timezone, time_format FROM admin WHERE id = $1', [adminId]);
+    const adminTimezone = (adminRow && adminRow.timezone) || 'UTC';
     const timeFormat = (adminRow && adminRow.time_format) || '12h';
     const defaultSchedules = await app.db.getAll(
       "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = $1 ORDER BY day_of_week, start_time",
@@ -1144,7 +1149,9 @@ function registerProfileRoutes(app) {
   });
 
   app.post('/profiles/default-availability', { preHandler: app.csrfProtection }, async (request, reply) => {
-    const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
+    const adminId = request.session.get('adminId');
+    const adminRow = await app.db.getOne('SELECT timezone FROM admin WHERE id = $1', [adminId]);
+    const adminTimezone = (adminRow && adminRow.timezone) || 'UTC';
     const entries = [];
     for (let day = 0; day <= 6; day++) {
       const key = `default_schedule[${day}]`;
@@ -1164,7 +1171,6 @@ function registerProfileRoutes(app) {
       }
     }
 
-    const adminId = request.session.get('adminId');
     await app.db.run("DELETE FROM default_schedule_templates WHERE user_id = $1", [adminId]);
     for (const entry of entries) {
       await app.db.run("INSERT INTO default_schedule_templates (user_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)", [adminId, entry.day_of_week, entry.start_time, entry.end_time]);
@@ -1177,8 +1183,8 @@ function registerProfileRoutes(app) {
     const token = reply.generateCsrf();
     const adminId = request.session.get('adminId');
     const calendars = await app.db.getAll("SELECT * FROM calendar_connections WHERE user_id = $1 AND status = 'connected'", [adminId]);
-    const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
-    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [adminId]);
+    const adminRow = await app.db.getOne('SELECT timezone, time_format FROM admin WHERE id = $1', [adminId]);
+    const adminTimezone = (adminRow && adminRow.timezone) || 'UTC';
     const timeFormat = (adminRow && adminRow.time_format) || '12h';
     const defaultTemplates = await app.db.getAll(
       "SELECT day_of_week, start_time, end_time FROM default_schedule_templates WHERE user_id = $1 ORDER BY day_of_week, start_time",
@@ -1229,7 +1235,8 @@ function registerProfileRoutes(app) {
       await app.db.run("INSERT INTO default_attendees (profile_id, email) VALUES ($1, $2)", [profileId, email]);
     }
 
-    const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
+    const adminTzRow = await app.db.getOne('SELECT timezone FROM admin WHERE id = $1', [adminId]);
+    const adminTimezone = (adminTzRow && adminTzRow.timezone) || 'UTC';
     let scheduleEntries = parseScheduleFromBody(request.body, adminTimezone);
     if (scheduleEntries.length === 0) {
       scheduleEntries = await app.db.getAll(
@@ -1277,8 +1284,8 @@ function registerProfileRoutes(app) {
     const readCalendarIds = (await app.db.getAll("SELECT calendar_connection_id FROM profile_read_calendars WHERE profile_id = $1", [profile.id])).map(r => r.calendar_connection_id);
     const writeCalendarIds = (await app.db.getAll("SELECT calendar_connection_id FROM profile_write_calendars WHERE profile_id = $1", [profile.id])).map(r => r.calendar_connection_id);
     const overrides = await app.db.getAll("SELECT * FROM schedule_overrides WHERE profile_id = $1 ORDER BY date", [profile.id]);
-    const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
-    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [adminId]);
+    const adminRow = await app.db.getOne('SELECT timezone, time_format FROM admin WHERE id = $1', [adminId]);
+    const adminTimezone = (adminRow && adminRow.timezone) || 'UTC';
     const timeFormat = (adminRow && adminRow.time_format) || '12h';
 
     const html = profileFormHtml(token, profile, calendars, attendees, { templates, readCalendarIds, writeCalendarIds }, null, overrides, adminTimezone, timeFormat);
@@ -1337,7 +1344,8 @@ function registerProfileRoutes(app) {
 
     // Replace schedule templates
     await app.db.run("DELETE FROM schedule_templates WHERE profile_id = $1", [id]);
-    const adminTimezone = process.env.ADMIN_TIMEZONE || 'UTC';
+    const adminTzRow2 = await app.db.getOne('SELECT timezone FROM admin WHERE id = $1', [adminId]);
+    const adminTimezone = (adminTzRow2 && adminTzRow2.timezone) || 'UTC';
     const scheduleEntries = parseScheduleFromBody(request.body, adminTimezone);
     for (const entry of scheduleEntries) {
       await app.db.run("INSERT INTO schedule_templates (profile_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)", [id, entry.day_of_week, entry.start_time, entry.end_time]);
