@@ -5117,7 +5117,7 @@ input[type="radio"] {
 .profile-card-indicator {
   width: 6px;
   height: 60px;
-  background: linear-gradient(135deg, #8B5CF6 0%, #6366F1 100%);
+  background: linear-gradient(135deg, var(--primary) 0%, #1a6fbf 100%);
   border-radius: 3px;
   flex-shrink: 0;
 }
@@ -5379,7 +5379,7 @@ input[type="radio"] {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #8B5CF6 0%, #6366F1 100%);
+  background: linear-gradient(135deg, var(--primary) 0%, #1a6fbf 100%);
   flex-shrink: 0;
 }
 
@@ -5562,6 +5562,77 @@ input[type="radio"] {
   width: 16px;
   height: 16px;
   accent-color: var(--primary);
+}
+
+/* ── Meeting Tool Dropdown ──────────────────────────── */
+.meeting-tool-select-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.meeting-tool-select {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 12px 40px 12px 14px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--neutral-0);
+  border: 1.5px solid var(--neutral-30);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.15s ease;
+  outline: none;
+}
+
+.meeting-tool-select:hover {
+  border-color: var(--primary);
+  background: var(--primary-50, rgba(40, 146, 215, 0.04));
+}
+
+.meeting-tool-select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-glow, rgba(40, 146, 215, 0.12));
+}
+
+.meeting-tool-select:active {
+  transform: scale(0.99);
+}
+
+.meeting-tool-select-icon {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  pointer-events: none;
+  transition: color 0.2s ease;
+}
+
+.meeting-tool-select:focus ~ .meeting-tool-select-icon {
+  color: var(--primary);
+}
+
+[data-theme="dark"] .meeting-tool-select {
+  background: transparent;
+  border-color: #333;
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .meeting-tool-select:hover {
+  border-color: var(--primary);
+  background: rgba(40, 146, 215, 0.06);
+}
+
+[data-theme="dark"] .meeting-tool-select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(40, 146, 215, 0.15);
+}
+
+[data-theme="dark"] .meeting-tool-select-icon {
+  color: #64748b;
 }
 
 /* ── Duration Chips ──────────────────────────────────── */

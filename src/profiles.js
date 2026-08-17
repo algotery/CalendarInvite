@@ -327,17 +327,20 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
-              <div class="float-field">
-                <input type="url" name="meeting_link_url" value="${escapeHtml(profile?.meeting_link_url || '')}" placeholder=" ">
-                <label>Meeting Link</label>
-              </div>
               <div class="field-group">
                 <span class="field-label">Meeting Tool</span>
-                <select name="meeting_tool">
-                  <option value="">None</option>
-                  <option value="meet" ${profile?.meeting_tool === 'meet' ? 'selected' : ''}>Google Meet</option>
-                  <option value="teams" ${profile?.meeting_tool === 'teams' ? 'selected' : ''}>Microsoft Teams</option>
-                </select>
+                <div class="meeting-tool-select-wrapper">
+                  <select name="meeting_tool" id="meeting-tool-select" class="meeting-tool-select">
+                    <option value=""${!profile?.meeting_tool ? ' selected' : ''}>None</option>
+                    <option value="meet"${profile?.meeting_tool === 'meet' ? ' selected' : ''}>Google Meet</option>
+                    <option value="teams"${profile?.meeting_tool === 'teams' ? ' selected' : ''}>Microsoft Teams</option>
+                  </select>
+                  <i class="ph-bold ph-caret-down meeting-tool-select-icon"></i>
+                </div>
+              </div>
+              <div class="float-field" id="meeting-link-field" style="${profile?.meeting_tool ? '' : 'display:none;'}">
+                <input type="url" name="meeting_link_url" value="${escapeHtml(profile?.meeting_link_url || '')}" placeholder=" ">
+                <label>Meeting Link (optional)</label>
               </div>
             </div>
           </div>
@@ -506,6 +509,20 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           }, 80);
         }
       }
+
+      // Meeting tool selection
+      (function() {
+        var select = document.getElementById('meeting-tool-select');
+        var linkField = document.getElementById('meeting-link-field');
+        if (!select) return;
+        select.addEventListener('change', function() {
+          if (select.value) {
+            linkField.style.display = '';
+          } else {
+            linkField.style.display = 'none';
+          }
+        });
+      })();
 
       // Duration chips management
       function removeDurationChip(btn) {
@@ -931,7 +948,8 @@ function registerProfileRoutes(app) {
             <div class="dropdown-menu" id="menu-${p.id}" style="display:none;">
               <a href="${bookingUrl}" target="_blank" class="dropdown-item"><i class="ph ph-eye"></i> View booking page</a>
               <button class="dropdown-item profile-overlay-trigger" data-url="/admin/profiles/${p.id}/edit?partial=1"><i class="ph ph-pencil-simple"></i> Edit</button>
-              <hr style="margin: 4px 0; border: none; border-top: 1px solid #e8e8e8;">
+              <hr style="margin: 4px 0; border: none; border-top: 1px solid var(--border-color);">
+
               <form method="POST" action="/admin/profiles/${p.id}/delete" id="delete-form-${p.id}" style="display:none"><input type="hidden" name="_csrf" value="${token}"></form>
               <button class="dropdown-item danger" onclick="AppModal.confirm('Are you sure you want to delete this profile?', function(){document.getElementById('delete-form-${p.id}').submit()}, {title:'Delete Profile', confirmText:'Delete', danger:true, icon:'<i class=\\'ph-fill ph-trash\\' style=\\'font-size:32px;color:var(--error)\\'></i>'})"><i class="ph ph-trash"></i> Delete</button>
             </div>
