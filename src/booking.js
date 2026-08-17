@@ -334,13 +334,29 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               <div class="booking-profile-meta">
                 <div class="booking-profile-meta-item">
                   <i class="ph-fill ph-clock"></i>
-                  <span id="duration-display">30 min</span>
-                  <div class="duration-toggle">
-                    <button type="button" class="duration-btn active" data-duration="30">30 min</button>
-                    <button type="button" class="duration-btn" data-duration="45">45 min</button>
-                    <button type="button" class="duration-btn" data-duration="60">60 min</button>
-                  </div>
+                  <span id="duration-display">${(() => {
+                    let durations = [30, 45, 60];
+                    try { durations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+                    return durations[0] + ' min';
+                  })()}</span>
                 </div>
+                ${(() => {
+                    let durations = [30, 45, 60];
+                    try { durations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+                    if (durations.length <= 1) return '';
+                    return '<div class="duration-dropdown" id="duration-dropdown">' +
+                      '<button type="button" class="duration-dropdown-trigger" id="duration-trigger">' +
+                        '<span class="duration-dropdown-value">' + durations[0] + ' min</span>' +
+                        '<i class="ph-bold ph-caret-down duration-dropdown-chevron"></i>' +
+                      '</button>' +
+                      '<div class="duration-dropdown-menu" id="duration-menu">' +
+                        durations.map((d, i) => '<button type="button" class="duration-dropdown-option' + (i === 0 ? ' active' : '') + '" data-duration="' + d + '">' +
+                          '<span class="duration-dropdown-option-label">' + d + ' min</span>' +
+                          '<i class="ph-bold ph-check duration-dropdown-check"></i>' +
+                        '</button>').join('') +
+                      '</div>' +
+                    '</div>';
+                  })()}
                 <div class="booking-profile-meta-item">
                   <i class="ph-fill ${meetingIcon}"></i>
                   <span>${meetingTool}</span>
@@ -449,7 +465,12 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
           let tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
           const availableDays = ${JSON.stringify(availableDays)};
           const BOOKING_TIME_FORMAT = '${bookingTimeFormat}';
-          var selectedDuration = 30;
+          var allowedDurations = ${(() => {
+            let durations = [30, 45, 60];
+            try { durations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+            return JSON.stringify(durations);
+          })()};
+          var selectedDuration = allowedDurations[0];
           let selectedSlotStart = null;
           let selectedDateStr = null;
 
@@ -551,17 +572,52 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
           function showBackButton() { document.getElementById('back-btn').style.display = 'inline-flex'; }
           function hideBackButton() { document.getElementById('back-btn').style.display = 'none'; }
 
-          document.querySelectorAll('.duration-btn').forEach(function(btn) {
-            btn.addEventListener('click', function() {
-              document.querySelectorAll('.duration-btn').forEach(function(b) { b.classList.remove('active'); });
-              btn.classList.add('active');
-              selectedDuration = parseInt(btn.dataset.duration);
-              document.getElementById('duration-display').textContent = selectedDuration + ' min';
-              busynessCache = {};
-              fetchBusyness(currentMonth.getFullYear(), currentMonth.getMonth());
-              if (selectedDateStr) loadSlots(selectedDateStr);
+          // Duration dropdown
+          (function() {
+            var dropdown = document.getElementById('duration-dropdown');
+            if (!dropdown) return;
+            var trigger = document.getElementById('duration-trigger');
+            var menu = document.getElementById('duration-menu');
+            var options = menu.querySelectorAll('.duration-dropdown-option');
+            var isOpen = false;
+
+            function openMenu() {
+              isOpen = true;
+              dropdown.classList.add('open');
+              trigger.setAttribute('aria-expanded', 'true');
+            }
+
+            function closeMenu() {
+              isOpen = false;
+              dropdown.classList.remove('open');
+              trigger.setAttribute('aria-expanded', 'false');
+            }
+
+            trigger.addEventListener('click', function(e) {
+              e.stopPropagation();
+              if (isOpen) { closeMenu(); } else { openMenu(); }
             });
-          });
+
+            document.addEventListener('click', function(e) {
+              if (isOpen && !dropdown.contains(e.target)) closeMenu();
+            });
+
+            options.forEach(function(opt) {
+              opt.addEventListener('click', function() {
+                options.forEach(function(o) { o.classList.remove('active'); });
+                opt.classList.add('active');
+                var val = parseInt(opt.dataset.duration);
+                selectedDuration = val;
+                var label = val + ' min';
+                document.getElementById('duration-display').textContent = label;
+                trigger.querySelector('.duration-dropdown-value').textContent = label;
+                closeMenu();
+                busynessCache = {};
+                fetchBusyness(currentMonth.getFullYear(), currentMonth.getMonth());
+                if (selectedDateStr) loadSlots(selectedDateStr);
+              });
+            });
+          })();
 
           var slotsAbortController = null;
 
@@ -596,7 +652,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
                     document.getElementById('form-step').style.display = 'block';
                     document.getElementById('booking-error').style.display = 'none';
                     updateStepIndicator(3);
-                    var dt = document.querySelector('.duration-toggle');
+                    var dt = document.getElementById('duration-dropdown');
                     if (dt) dt.style.display = 'none';
                   });
                 });
@@ -629,7 +685,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
               document.getElementById('slots-section').style.display = 'block';
               updateStepIndicator(2);
               updateSelectedInfo(selectedDateStr, null);
-              var dt = document.querySelector('.duration-toggle');
+              var dt = document.getElementById('duration-dropdown');
               if (dt) dt.style.display = '';
             } else if (slotsVisible) {
               document.getElementById('slots-section').style.display = 'none';
@@ -818,11 +874,14 @@ function registerBusynessApi(app, { encryptionKey }) {
 
     if (!month) return reply.code(400).send({ error: 'month is required (YYYY-MM)' });
 
-    const durationMinutes = parseInt(duration, 10) || 30;
-    if (!VALID_DURATIONS.includes(durationMinutes)) return reply.code(400).send({ error: 'duration must be 30, 45, or 60' });
-
     const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE slug = $1", [slug]);
     if (!profile) return reply.code(404).send({ error: 'profile not found' });
+
+    let profileDurations = VALID_DURATIONS;
+    try { profileDurations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+
+    const durationMinutes = parseInt(duration, 10) || profileDurations[0];
+    if (!profileDurations.includes(durationMinutes)) return reply.code(400).send({ error: 'invalid duration for this profile' });
 
     const [year, mon] = month.split('-').map(Number);
     const daysInMonth = new Date(year, mon, 0).getDate();
@@ -903,11 +962,14 @@ function registerSlotsApi(app, { encryptionKey }) {
     const { date, duration } = request.query;
     if (!date || !duration) return reply.code(400).send({ error: 'date and duration are required' });
 
-    const durationMinutes = parseInt(duration, 10);
-    if (!VALID_DURATIONS.includes(durationMinutes)) return reply.code(400).send({ error: 'duration must be 30, 45, or 60' });
-
     const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE slug = $1", [slug]);
     if (!profile) return reply.code(404).send({ error: 'profile not found' });
+
+    let profileDurations = VALID_DURATIONS;
+    try { profileDurations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+
+    const durationMinutes = parseInt(duration, 10);
+    if (!profileDurations.includes(durationMinutes)) return reply.code(400).send({ error: 'invalid duration for this profile' });
 
     const now = new Date();
     let slots = await computeSlots(app.db, profile.id, date, durationMinutes, now);
@@ -974,12 +1036,15 @@ function registerBookingSubmitApi(app, { encryptionKey }) {
     }
 
     const durationMinutes = parseInt(duration, 10);
-    if (!VALID_DURATIONS.includes(durationMinutes)) return reply.code(400).send({ error: 'duration must be 30, 45, or 60' });
     if (!start_time) return reply.code(400).send({ error: 'start_time is required' });
 
     const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE slug = $1", [slug]);
     if (!profile) return reply.code(404).send({ error: 'profile not found' });
     if (!profile.is_active) return reply.code(400).send({ error: 'This profile is not currently accepting bookings' });
+
+    let profileDurations = VALID_DURATIONS;
+    try { profileDurations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+    if (!profileDurations.includes(durationMinutes)) return reply.code(400).send({ error: 'invalid duration for this profile' });
 
     if (await checkEmailRateLimit(app.db, email.trim())) return reply.code(429).send({ error: 'Too many bookings, please try again later' });
 

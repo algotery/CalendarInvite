@@ -32,6 +32,7 @@ const SCHEMA_SQL = `
     meeting_link_url TEXT,
     meeting_tool TEXT CHECK(meeting_tool IN ('teams', 'meet')),
     buffer_time_minutes INTEGER NOT NULL DEFAULT 0,
+    allowed_durations TEXT NOT NULL DEFAULT '[30,45,60]',
     created_at TEXT NOT NULL
   );
 
@@ -122,6 +123,7 @@ async function createDatabase(connectionString) {
 
   await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'light'`).catch(() => {});
   await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS time_format TEXT NOT NULL DEFAULT '12h'`).catch(() => {});
+  await pool.query(`ALTER TABLE booking_profiles ADD COLUMN IF NOT EXISTS allowed_durations TEXT NOT NULL DEFAULT '[30,45,60]'`).catch(() => {});
 
   return {
     async query(text, params) {

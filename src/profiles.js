@@ -239,17 +239,60 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
             </div>
           </div>
 
-          <!-- Duration & Buffer Section -->
+          <!-- Duration Section -->
           <div class="modal-section ${isEdit ? 'open' : ''}">
             <div class="modal-section-header" onclick="toggleSection(this)">
               <div>
-                <h3 class="modal-section-title">Duration & Buffer</h3>
+                <h3 class="modal-section-title">Meeting Duration</h3>
               </div>
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
               <div class="field-group">
-                <span class="field-label">Buffer Time</span>
+                <span class="field-label">Duration Options</span>
+                <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">Add up to 5 duration options visitors can choose from when booking.</p>
+                <div class="duration-chips-container" id="duration-chips-container">
+                  <div class="duration-chips" id="duration-chips">
+                    ${(() => {
+                      let durations = [30, 45, 60];
+                      try { durations = JSON.parse(profile?.allowed_durations || '[30,45,60]'); } catch(e) {}
+                      return durations.map(d => `
+                        <div class="duration-chip" data-value="${d}">
+                          <input type="hidden" name="allowed_durations[]" value="${d}">
+                          <span class="duration-chip-label">${d} min</span>
+                          <button type="button" class="duration-chip-remove" onclick="removeDurationChip(this)">
+                            <i class="ph-bold ph-x"></i>
+                          </button>
+                        </div>
+                      `).join('');
+                    })()}
+                  </div>
+                  <div class="duration-add-row" id="duration-add-row">
+                    <div class="duration-add-input-wrap">
+                      <input type="number" id="new-duration-input" min="5" max="480" step="5" placeholder="Minutes">
+                      <span class="duration-add-suffix">min</span>
+                    </div>
+                    <button type="button" class="duration-add-btn" id="add-duration-btn">
+                      <i class="ph-bold ph-plus"></i> Add
+                    </button>
+                  </div>
+                  <p class="duration-chips-hint" id="duration-limit-msg" style="display: none;">Maximum 5 duration options reached.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Buffer Section -->
+          <div class="modal-section ${isEdit ? 'open' : ''}">
+            <div class="modal-section-header" onclick="toggleSection(this)">
+              <div>
+                <h3 class="modal-section-title">Buffer Time</h3>
+              </div>
+              <i class="ph-bold ph-caret-down modal-section-chevron"></i>
+            </div>
+            <div class="modal-section-content">
+              <div class="field-group">
+                <span class="field-label">Time between meetings</span>
                 <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
                   <div style="display: flex; align-items: center; gap: 8px; background: var(--neutral-10); border: 1px solid var(--neutral-30); border-radius: 8px; padding: 10px 16px;">
                     <input
@@ -463,6 +506,81 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           }, 80);
         }
       }
+
+      // Duration chips management
+      function removeDurationChip(btn) {
+        const chip = btn.closest('.duration-chip');
+        const container = document.getElementById('duration-chips');
+        chip.style.transform = 'scale(0.8)';
+        chip.style.opacity = '0';
+        setTimeout(function() {
+          chip.remove();
+          updateDurationUI();
+        }, 150);
+      }
+
+      function updateDurationUI() {
+        const chips = document.querySelectorAll('.duration-chip');
+        const addRow = document.getElementById('duration-add-row');
+        const limitMsg = document.getElementById('duration-limit-msg');
+        if (chips.length >= 5) {
+          addRow.style.display = 'none';
+          limitMsg.style.display = 'block';
+        } else {
+          addRow.style.display = 'flex';
+          limitMsg.style.display = 'none';
+        }
+      }
+
+      document.getElementById('add-duration-btn').addEventListener('click', function() {
+        const input = document.getElementById('new-duration-input');
+        const value = parseInt(input.value, 10);
+        if (!value || value < 5 || value > 480) {
+          input.style.borderColor = 'var(--error)';
+          setTimeout(function() { input.style.borderColor = ''; }, 800);
+          return;
+        }
+
+        const existing = document.querySelectorAll('.duration-chip');
+        if (existing.length >= 5) return;
+
+        for (var i = 0; i < existing.length; i++) {
+          if (parseInt(existing[i].dataset.value) === value) {
+            existing[i].style.transform = 'scale(1.05)';
+            setTimeout(function() { existing[i].style.transform = ''; }, 200);
+            input.value = '';
+            return;
+          }
+        }
+
+        const chip = document.createElement('div');
+        chip.className = 'duration-chip';
+        chip.dataset.value = value;
+        chip.style.opacity = '0';
+        chip.style.transform = 'scale(0.8)';
+        chip.innerHTML = '<input type="hidden" name="allowed_durations[]" value="' + value + '">' +
+          '<span class="duration-chip-label">' + value + ' min</span>' +
+          '<button type="button" class="duration-chip-remove" onclick="removeDurationChip(this)"><i class="ph-bold ph-x"></i></button>';
+
+        document.getElementById('duration-chips').appendChild(chip);
+        requestAnimationFrame(function() {
+          chip.style.transition = 'opacity 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)';
+          chip.style.opacity = '1';
+          chip.style.transform = 'scale(1)';
+        });
+
+        input.value = '';
+        updateDurationUI();
+      });
+
+      document.getElementById('new-duration-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          document.getElementById('add-duration-btn').click();
+        }
+      });
+
+      updateDurationUI();
 
       (function() {
         flatpickr('.time-picker-override', { enableTime: true, noCalendar: true, dateFormat: "H:i", time_24hr: APP_TIME_FORMAT === '24h' });
@@ -1222,10 +1340,18 @@ function registerProfileRoutes(app) {
 
     const buffer_time_minutes = parseInt(request.body.buffer_time_minutes, 10) || 0;
 
+    const rawDurations = request.body['allowed_durations[]'];
+    let allowedDurations = [30, 45, 60];
+    if (rawDurations) {
+      const arr = Array.isArray(rawDurations) ? rawDurations : [rawDurations];
+      const parsed = arr.map(v => parseInt(v, 10)).filter(v => v >= 5 && v <= 480);
+      if (parsed.length > 0) allowedDurations = [...new Set(parsed)].slice(0, 5).sort((a, b) => a - b);
+    }
+
     const writeCalIdDirect = request.body['write_calendar_id'] ? Number(request.body['write_calendar_id']) : null;
     const result = await app.db.query(
-      "INSERT INTO booking_profiles (user_id, slug, name, is_active, write_calendar_id, meeting_link_url, meeting_tool, buffer_time_minutes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
-      [adminId, slug, name, true, writeCalIdDirect, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, new Date().toISOString()]
+      "INSERT INTO booking_profiles (user_id, slug, name, is_active, write_calendar_id, meeting_link_url, meeting_tool, buffer_time_minutes, allowed_durations, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+      [adminId, slug, name, true, writeCalIdDirect, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, JSON.stringify(allowedDurations), new Date().toISOString()]
     );
 
     const profileId = result.rows[0].id;
@@ -1329,10 +1455,18 @@ function registerProfileRoutes(app) {
       return reply.type('text/html').send(require('./app').BASE_LAYOUT('Edit Profile', html, true, 'profiles'));
     }
 
+    const rawDurations = request.body['allowed_durations[]'];
+    let allowedDurations = [30, 45, 60];
+    if (rawDurations) {
+      const arr = Array.isArray(rawDurations) ? rawDurations : [rawDurations];
+      const parsed = arr.map(v => parseInt(v, 10)).filter(v => v >= 5 && v <= 480);
+      if (parsed.length > 0) allowedDurations = [...new Set(parsed)].slice(0, 5).sort((a, b) => a - b);
+    }
+
     const writeCalIdForProfile = request.body['write_calendar_id'] ? Number(request.body['write_calendar_id']) : null;
     await app.db.run(
-      "UPDATE booking_profiles SET slug = $1, name = $2, write_calendar_id = $3, meeting_link_url = $4, meeting_tool = $5, buffer_time_minutes = $6 WHERE id = $7",
-      [slug, name, writeCalIdForProfile, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, id]
+      "UPDATE booking_profiles SET slug = $1, name = $2, write_calendar_id = $3, meeting_link_url = $4, meeting_tool = $5, buffer_time_minutes = $6, allowed_durations = $7 WHERE id = $8",
+      [slug, name, writeCalIdForProfile, meeting_link_url || null, meeting_tool || null, buffer_time_minutes, JSON.stringify(allowedDurations), id]
     );
 
     // Replace attendees

@@ -751,9 +751,41 @@ html[data-theme="dark"] body {
   color: #121212;
 }
 
-[data-theme="dark"] .duration-btn.active {
-  background: var(--primary);
-  color: #121212;
+[data-theme="dark"] .duration-dropdown-trigger {
+  background: rgba(40, 146, 215, 0.12);
+  color: var(--accent);
+}
+
+[data-theme="dark"] .duration-dropdown-trigger:hover {
+  background: rgba(40, 146, 215, 0.2);
+  border-color: var(--primary);
+}
+
+[data-theme="dark"] .duration-dropdown.open .duration-dropdown-trigger {
+  border-color: var(--primary);
+  background: rgba(40, 146, 215, 0.15);
+}
+
+[data-theme="dark"] .duration-dropdown-menu {
+  background: #1e1e1e;
+  border-color: #333;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .duration-dropdown-option {
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .duration-dropdown-option:hover {
+  background: #2a2a2a;
+}
+
+[data-theme="dark"] .duration-dropdown-option.active {
+  color: var(--accent);
+}
+
+[data-theme="dark"] .duration-dropdown-check {
+  color: var(--accent);
 }
 
 [data-theme="dark"] button.secondary,
@@ -2263,50 +2295,137 @@ input[type="radio"] {
   flex-shrink: 0;
 }
 
+/* ── Booking Duration Dropdown ────────────────────────── */
 #duration-display {
   font-weight: 500;
 }
 
-.duration-toggle {
+.duration-dropdown {
+  position: relative;
+  display: inline-block;
+  margin-top: 2px;
+}
+
+.duration-dropdown-trigger {
   display: inline-flex;
-  border: 1px solid var(--neutral-30);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.duration-btn {
-  padding: 5px 10px;
-  font-size: 0.75rem;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 0.8125rem;
   font-weight: 600;
-  border: none;
-  background: var(--neutral-0);
-  color: var(--text-secondary);
+  color: var(--primary);
+  background: var(--primary-light);
+  border: 1.5px solid transparent;
+  border-radius: 8px;
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease;
-  border-right: 1px solid var(--neutral-30);
-  text-align: center;
-  white-space: nowrap;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.duration-btn:last-child {
-  border-right: none;
+.duration-dropdown-trigger:hover {
+  background: var(--primary-50);
+  border-color: var(--primary);
 }
 
-.duration-btn:hover {
-  background: var(--neutral-10);
+.duration-dropdown-trigger:active {
+  transform: scale(0.97);
+}
+
+.duration-dropdown.open .duration-dropdown-trigger {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.duration-dropdown-chevron {
+  font-size: 12px;
+  transition: transform 0.25s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+.duration-dropdown.open .duration-dropdown-chevron {
+  transform: rotate(180deg);
+}
+
+.duration-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 100%;
+  background: var(--neutral-0);
+  border: 1px solid var(--neutral-30);
+  border-radius: 12px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  opacity: 0;
+  transform: translateY(-4px) scale(0.97);
+  transform-origin: top left;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.3, 0.64, 1);
+  z-index: 100;
+}
+
+.duration-dropdown.open .duration-dropdown-menu {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.duration-dropdown-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 0.8125rem;
+  font-weight: 500;
   color: var(--text-primary);
-  box-shadow: none;
-  transform: none;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.duration-btn.active {
-  background: var(--primary);
-  color: var(--text-on-primary);
+.duration-dropdown-option:hover {
+  background: var(--neutral-10);
 }
 
-.duration-btn.active:hover {
-  background: var(--primary-hover);
-  color: var(--text-on-primary);
+.duration-dropdown-option:active {
+  background: var(--neutral-20);
+}
+
+.duration-dropdown-option.active {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.duration-dropdown-check {
+  font-size: 14px;
+  color: var(--primary);
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.duration-dropdown-option.active .duration-dropdown-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duration-dropdown-menu {
+    transition: opacity 0.15s ease;
+    transform: none !important;
+  }
+  .duration-dropdown.open .duration-dropdown-menu {
+    transform: none !important;
+  }
+  .duration-dropdown-chevron {
+    transition: transform 0.1s ease;
+  }
+  .duration-dropdown-check {
+    transition: opacity 0.1s ease;
+  }
 }
 
 .booking-profile-selected {
@@ -2886,20 +3005,8 @@ input[type="radio"] {
   width: 100%;
 }
 
-.duration-btn {
-  min-width: 100px;
-  flex: 0 0 auto;
-}
-
 .slot-btn {
   min-width: 100px;
-}
-
-#duration-step [role="group"] {
-  width: 100%;
-  max-width: 450px;
-  justify-content: center;
-  margin: 0 auto;
 }
 
 /* ── Calendar Widget ────────────────────────────────────────── */
@@ -4080,6 +4187,11 @@ input[type="radio"] {
 
   .booking-profile-title {
     font-size: 1.5rem;
+  }
+
+  .duration-dropdown-trigger {
+    padding: 7px 12px;
+    font-size: 0.75rem;
   }
 
   #booking-widget section {
@@ -5450,6 +5562,162 @@ input[type="radio"] {
   width: 16px;
   height: 16px;
   accent-color: var(--primary);
+}
+
+/* ── Duration Chips ──────────────────────────────────── */
+.duration-chips-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.duration-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.duration-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--primary-light);
+  border: 1.5px solid var(--primary);
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.duration-chip-label {
+  letter-spacing: -0.01em;
+}
+
+.duration-chip-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: rgba(40, 146, 215, 0.15);
+  border-radius: 50%;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.duration-chip-remove:hover {
+  background: rgba(40, 146, 215, 0.3);
+  transform: scale(1.1);
+}
+
+.duration-chip-remove:active {
+  transform: scale(0.9);
+}
+
+.duration-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.duration-add-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--neutral-10);
+  border: 1.5px solid var(--neutral-30);
+  border-radius: 8px;
+  padding: 8px 12px;
+  transition: border-color 0.15s ease;
+}
+
+.duration-add-input-wrap:focus-within {
+  border-color: var(--primary);
+}
+
+.duration-add-input-wrap input {
+  width: 64px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  margin: 0;
+  padding: 0;
+  -moz-appearance: textfield;
+}
+
+.duration-add-input-wrap input::-webkit-outer-spin-button,
+.duration-add-input-wrap input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.duration-add-suffix {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.duration-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1.5px solid var(--primary);
+  border-radius: 8px;
+  background: var(--neutral-0);
+  color: var(--primary);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.duration-add-btn:hover {
+  background: var(--primary-light);
+}
+
+.duration-add-btn:active {
+  transform: scale(0.97);
+}
+
+.duration-chips-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+[data-theme="dark"] .duration-chip {
+  background: rgba(40, 146, 215, 0.15);
+  border-color: var(--primary);
+  color: var(--accent);
+}
+
+[data-theme="dark"] .duration-chip-remove {
+  background: rgba(109, 174, 219, 0.15);
+  color: var(--accent);
+}
+
+[data-theme="dark"] .duration-chip-remove:hover {
+  background: rgba(109, 174, 219, 0.3);
+}
+
+[data-theme="dark"] .duration-add-btn {
+  border-color: var(--primary);
+  color: var(--accent);
+  background: transparent;
+}
+
+[data-theme="dark"] .duration-add-btn:hover {
+  background: rgba(40, 146, 215, 0.1);
 }
 
 /* ── Calendar Integration ─────────────────────────────── */
