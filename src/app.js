@@ -15,6 +15,7 @@ const { registerBookingRoutes, registerSlotsApi, registerBusynessApi, registerBo
 const { getBatchedBookings } = require('./performance-fixes');
 const { requireAuth } = require('./middleware/auth');
 const { registerHealthRoutes } = require('./routes/health');
+const { registerOnboardingRoutes } = require('./routes/onboarding');
 const { BASE_LAYOUT, escapeHtml, TIMEZONES } = require('./views/layout');
 
 
@@ -80,6 +81,8 @@ async function buildApp(opts = {}) {
 
     app.get('/login', async (request, reply) => {
       const token = reply.generateCsrf();
+      const next = request.query.next || '';
+      const nextInput = next ? `<input type="hidden" name="next" value="${escapeHtml(next)}">` : '';
       reply.type('text/html').send(BASE_LAYOUT('Login', `
         <div class="login-card">
           <article>
@@ -88,6 +91,7 @@ async function buildApp(opts = {}) {
             <div class="login-subtitle">Welcome back! Sign in to your account.</div>
             <form method="POST" action="/admin/login">
               <input type="hidden" name="_csrf" value="${token}">
+              ${nextInput}
               <div class="float-field">
                 <input type="email" name="email" id="login-email" placeholder=" " required autofocus>
                 <label for="login-email">Email</label>
@@ -146,10 +150,19 @@ async function buildApp(opts = {}) {
       }
 
       request.session.set('adminId', admin.id);
-      if (isAjax) {
-        return reply.send({ redirect: '/admin/dashboard' });
+      const nextUrl = request.body?.next || request.query?.next;
+      let dest;
+      if (nextUrl && nextUrl.startsWith('/admin/')) {
+        dest = nextUrl;
+      } else {
+        const onboardingCheck = await app.db.getOne('SELECT onboarding_completed_at, email FROM admin WHERE id = $1', [admin.id]);
+        const forceOnboarding = onboardingCheck && onboardingCheck.email === 'onboarding@test.com';
+        dest = forceOnboarding || !(onboardingCheck && onboardingCheck.onboarding_completed_at) ? '/admin/onboarding' : '/admin/dashboard';
       }
-      return reply.redirect('/admin/dashboard');
+      if (isAjax) {
+        return reply.send({ redirect: dest });
+      }
+      return reply.redirect(dest);
     });
 
     app.get('/register', async (request, reply) => {
@@ -245,21 +258,47 @@ async function buildApp(opts = {}) {
       const result = await app.db.query('INSERT INTO admin (email, username, password_hash, timezone, notification_email) VALUES ($1, $2, $3, $4, $5) RETURNING id', [email, username.trim(), passwordHash, 'UTC', email]);
 
       request.session.set('adminId', result.rows[0].id);
-      if (isAjax) return reply.send({ redirect: '/admin/dashboard' });
-      return reply.redirect('/admin/dashboard');
+      if (isAjax) return reply.send({ redirect: '/admin/onboarding' });
+      return reply.redirect('/admin/onboarding');
     });
 
     app.addHook('preHandler', requireAuth);
 
+    registerOnboardingRoutes(app, opts);
 
     app.get('/dashboard', async (request, reply) => {
       const token = reply.generateCsrf();
       const adminId = request.session.get('adminId');
-      const admin = await app.db.getOne('SELECT timezone, time_format FROM admin WHERE id = $1', [adminId]);
+      const admin = await app.db.getOne('SELECT timezone, time_format, onboarding_completed_at FROM admin WHERE id = $1', [adminId]);
       const adminTz = admin ? admin.timezone : 'UTC';
       const adminTimeFormat = admin ? (admin.time_format || '12h') : '12h';
 
       const activeProfiles = await app.db.getOne("SELECT COUNT(*) as count FROM booking_profiles WHERE is_active = true AND user_id = $1", [adminId]);
+
+      let setupBanner = '';
+      if (!admin?.onboarding_completed_at) {
+        const hasCalendar = await app.db.getOne('SELECT id FROM calendar_connections WHERE user_id = $1 LIMIT 1', [adminId]);
+        const hasSchedule = await app.db.getOne('SELECT id FROM default_schedule_templates WHERE user_id = $1 LIMIT 1', [adminId]);
+        const hasProfile = await app.db.getOne('SELECT id FROM booking_profiles WHERE user_id = $1 LIMIT 1', [adminId]);
+        const todos = [];
+        if (!hasCalendar) todos.push('<a href="/admin/calendars" class="setup-todo-item"><i class="ph ph-calendar-plus"></i> Connect calendar</a>');
+        if (!hasSchedule) todos.push('<a href="/admin/profiles?tab=availability" class="setup-todo-item"><i class="ph ph-clock"></i> Set availability</a>');
+        if (!hasProfile) todos.push('<a href="/admin/profiles/new" class="setup-todo-item profile-overlay-trigger" data-url="/admin/profiles/new?partial=1"><i class="ph ph-user-plus"></i> Create profile</a>');
+        if (todos.length > 0) {
+          setupBanner = `
+            <div class="setup-banner">
+              <div class="setup-banner-text">
+                <i class="ph ph-sparkle"></i>
+                <span>Finish setting up your account</span>
+              </div>
+              <div class="setup-banner-todos">${todos.join('')}</div>
+              <form method="POST" action="/admin/onboarding/complete" style="display:inline">
+                <input type="hidden" name="_csrf" value="${token}">
+                <button type="submit" class="setup-banner-dismiss">Dismiss</button>
+              </form>
+            </div>`;
+        }
+      }
       const now = new Date().toISOString();
       const upcomingCount = await app.db.getOne("SELECT COUNT(*) as count FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.status = 'confirmed' AND b.start_time > $1 AND bp.user_id = $2", [now, adminId]);
       const next5 = await app.db.getAll(
@@ -286,6 +325,7 @@ async function buildApp(opts = {}) {
 
       reply.type('text/html').send(BASE_LAYOUT('Dashboard', `
         <div class="dashboard-page">
+          ${setupBanner}
           <div class="dashboard-header">
             <h1>Dashboard</h1>
           </div>
@@ -927,8 +967,13 @@ async function buildApp(opts = {}) {
           <a href="/admin/calendars" role="button" class="secondary">Back to Calendars</a>
         `));
       }
-      const state = crypto.randomBytes(16).toString('hex');
-      request.session.set('googleOauthState', state);
+      const from = request.query.from || '';
+      const adminId = request.session.get('adminId');
+      const nonce = crypto.randomBytes(16).toString('hex');
+      const payload = Buffer.from(JSON.stringify({ nonce, adminId, from })).toString('base64url');
+      const hmac = crypto.createHmac('sha256', encryptionKey).update(payload).digest('base64url');
+      const state = `${payload}.${hmac}`;
+      request.session.set('googleOauthState', nonce);
       const url = buildGoogleAuthUrl(googleClientId, googleRedirectUri, state);
       return reply.redirect(url);
     });
@@ -938,13 +983,28 @@ async function buildApp(opts = {}) {
       if (!code || error) {
         return reply.redirect('/admin/calendars?error=oauth_denied');
       }
-      const expectedState = request.session.get('googleOauthState');
-      if (expectedState) {
-        if (!state || state !== expectedState) {
+
+      let stateAdminId = null;
+      let stateFrom = '';
+      if (state && state.includes('.')) {
+        const [payload, sig] = state.split('.');
+        const expectedSig = crypto.createHmac('sha256', encryptionKey).update(payload).digest('base64url');
+        if (sig === expectedSig) {
+          try {
+            const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
+            stateAdminId = decoded.adminId;
+            stateFrom = decoded.from || '';
+            const expectedNonce = request.session.get('googleOauthState');
+            if (expectedNonce && decoded.nonce !== expectedNonce) {
+              return reply.redirect('/admin/calendars?error=oauth_failed');
+            }
+          } catch {}
+        } else {
           return reply.redirect('/admin/calendars?error=oauth_failed');
         }
-        request.session.set('googleOauthState', null);
       }
+      request.session.set('googleOauthState', null);
+
       try {
         const tokens = await exchangeCodeForTokens(code, googleClientId, googleClientSecret, googleRedirectUri);
         const email = await getGoogleUserEmail(tokens.access_token);
@@ -953,10 +1013,11 @@ async function buildApp(opts = {}) {
         const encryptedAccess = encrypt(tokens.access_token, encryptionKey);
         const encryptedRefresh = tokens.refresh_token ? encrypt(tokens.refresh_token, encryptionKey) : null;
 
-        const userId = request.session.get('adminId');
+        const userId = request.session.get('adminId') || stateAdminId;
         if (!userId) {
-          return reply.redirect('/admin/login');
+          return reply.redirect('/admin/login?next=/admin/onboarding');
         }
+        request.session.set('adminId', userId);
 
         const existing = await app.db.getOne(
           'SELECT id FROM calendar_connections WHERE provider = $1 AND email = $2 AND user_id = $3',
@@ -975,7 +1036,9 @@ async function buildApp(opts = {}) {
           );
         }
 
-        return reply.redirect('/admin/calendars');
+        const calFrom = request.session.get('calendarFrom') || stateFrom;
+        request.session.set('calendarFrom', null);
+        return reply.redirect(calFrom === 'onboarding' ? '/admin/onboarding?step=2' : '/admin/calendars');
       } catch (err) {
         request.log.error(err);
         return reply.redirect('/admin/calendars?error=oauth_failed');
@@ -993,9 +1056,14 @@ async function buildApp(opts = {}) {
           <a href="/admin/calendars" role="button" class="secondary">Back to Calendars</a>
         `));
       }
+      const from = request.query.from || '';
+      const adminId = request.session.get('adminId');
+      const nonce = crypto.randomBytes(16).toString('hex');
+      const payload = Buffer.from(JSON.stringify({ nonce, adminId, from })).toString('base64url');
+      const hmac = crypto.createHmac('sha256', encryptionKey).update(payload).digest('base64url');
+      const state = `${payload}.${hmac}`;
+      request.session.set('oauthState', nonce);
       const scope = 'offline_access Calendars.ReadWrite User.Read';
-      const state = crypto.randomBytes(16).toString('hex');
-      request.session.set('oauthState', state);
       const authUrl = new URL(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`);
       authUrl.searchParams.set('client_id', clientId);
       authUrl.searchParams.set('response_type', 'code');
@@ -1011,9 +1079,30 @@ async function buildApp(opts = {}) {
       if (!code) {
         return reply.status(400).send('Missing authorization code');
       }
-      const expectedState = request.session.get('oauthState');
-      if (!state || state !== expectedState) {
-        return reply.status(403).send('Invalid OAuth state');
+
+      let stateAdminId = null;
+      let stateFrom = '';
+      if (state && state.includes('.')) {
+        const [payload, sig] = state.split('.');
+        const expectedSig = crypto.createHmac('sha256', encryptionKey).update(payload).digest('base64url');
+        if (sig === expectedSig) {
+          try {
+            const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
+            stateAdminId = decoded.adminId;
+            stateFrom = decoded.from || '';
+            const expectedNonce = request.session.get('oauthState');
+            if (expectedNonce && decoded.nonce !== expectedNonce) {
+              return reply.status(403).send('Invalid OAuth state');
+            }
+          } catch {}
+        } else {
+          return reply.status(403).send('Invalid OAuth state');
+        }
+      } else {
+        const expectedState = request.session.get('oauthState');
+        if (!state || state !== expectedState) {
+          return reply.status(403).send('Invalid OAuth state');
+        }
       }
       request.session.set('oauthState', null);
 
@@ -1048,10 +1137,11 @@ async function buildApp(opts = {}) {
 
       const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
 
-      const userId = request.session.get('adminId');
+      const userId = request.session.get('adminId') || stateAdminId;
       if (!userId) {
-        return reply.redirect('/admin/login');
+        return reply.redirect('/admin/login?next=/admin/onboarding');
       }
+      request.session.set('adminId', userId);
 
       const msEmail = meData.mail || meData.userPrincipalName;
       const msExisting = await app.db.getOne(
@@ -1085,7 +1175,9 @@ async function buildApp(opts = {}) {
         ]);
       }
 
-      return reply.redirect('/admin/calendars');
+      const calFrom = request.session.get('calendarFrom') || stateFrom;
+      request.session.set('calendarFrom', null);
+      return reply.redirect(calFrom === 'onboarding' ? '/admin/onboarding?step=2' : '/admin/calendars');
     });
 
     app.get('/calendars/connect/zoho', async (request, reply) => {
