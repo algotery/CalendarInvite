@@ -48,7 +48,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
           <a href="/" class="booking-header-logo">
             <span class="booking-header-powered">POWERED BY</span>
             <img src="/img/icon.svg" alt="" class="booking-header-logo-icon">
-            <img src="/img/wordmark.svg" alt="Lumi" class="booking-header-logo-wordmark">
+            <img src="/img/wordmark.svg" alt="MeetsGo" class="booking-header-logo-wordmark">
           </a>
         </div>
         <div class="booking-header-center">

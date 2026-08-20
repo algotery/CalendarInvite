@@ -32,7 +32,7 @@ function registerOnboardingRoutes(app, opts = {}) {
         <div class="onboarding-container">
           <div class="onboarding-header">
             <img src="/img/icon.svg" alt="" class="onboarding-logo">
-            <h1 class="onboarding-title">Welcome to Lumi</h1>
+            <h1 class="onboarding-title">Welcome to MeetsGo</h1>
             <p class="onboarding-subtitle">Let's get you set up in a few quick steps.</p>
           </div>
 

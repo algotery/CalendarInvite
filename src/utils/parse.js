@@ -8,8 +8,8 @@ function parseScheduleFromBody(body, adminTimezone = 'UTC') {
     const ends = body[`${key}[end][]`];
     if (!starts || !ends) continue;
 
-    const startArr = Array.isArray(starts) ? starts : [starts];
-    const endArr = Array.isArray(ends) ? ends : [ends];
+    const startArr = Array.isArray(starts) ? starts.slice(0, 10) : [starts];
+    const endArr = Array.isArray(ends) ? ends.slice(0, 10) : [ends];
 
     for (let i = 0; i < startArr.length; i++) {
       if (startArr[i] && endArr[i]) {

@@ -1181,6 +1181,9 @@ body.booking-page {
   width: 100%;
   background: var(--neutral-10);
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   animation: fadeIn 0.3s var(--ease-out);
 }
 
@@ -4989,6 +4992,10 @@ input[type="radio"] {
 .profiles-container {
   max-width: 100%;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .profiles-header {
@@ -5061,10 +5068,6 @@ input[type="radio"] {
   display: none;
 }
 
-.profiles-tab-panel.active {
-  display: block;
-}
-
 .availability-section {
   background: var(--neutral-0);
   border: 1px solid var(--border-color);
@@ -5082,6 +5085,15 @@ input[type="radio"] {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.profiles-tab-panel.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Profile Card - Calendly Style */
@@ -5785,6 +5797,50 @@ input[type="radio"] {
   border-color: var(--primary);
   color: var(--accent);
   background: transparent;
+}
+
+[data-theme="dark"] .duration-add-input-wrap {
+  background: var(--neutral-30);
+  border-color: var(--neutral-30);
+}
+
+[data-theme="dark"] .duration-add-input-wrap:focus-within {
+  border-color: var(--primary);
+}
+
+.buffer-preset-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 20px;
+  border: 1.5px solid var(--neutral-30);
+  background: var(--neutral-0);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.buffer-preset-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.buffer-preset-btn:hover:not(.active) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+[data-theme="dark"] .buffer-preset-btn {
+  background: transparent;
+  border-color: var(--neutral-30);
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .buffer-preset-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
 }
 
 [data-theme="dark"] .duration-add-btn:hover {

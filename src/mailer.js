@@ -69,7 +69,7 @@ async function sendNewBookingNotification(adminEmail, booking, profileName, canc
             <a href="${cancelUrl}" style="display: inline-block; padding: 12px 28px; background: #dc2626; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px; font-weight: 500;">Cancel This Booking</a>
           </div>
           <p style="margin: 24px 0 0; color: #9e9e9e; font-size: 12px; text-align: center;">
-            This is an automated notification from Lumi.
+            This is an automated notification from MeetsGo.
           </p>
         </div>
       </div>
@@ -77,7 +77,7 @@ async function sendNewBookingNotification(adminEmail, booking, profileName, canc
   `;
 
   await t.sendMail({
-    from: `Lumi <${getFromAddress()}>`,
+    from: `MeetsGo <${getFromAddress()}>`,
     to: adminEmail,
     subject: `New booking: ${booking.title} - ${dateStr}`,
     html,
@@ -123,7 +123,7 @@ async function sendBookingCancelledNotification(bookerEmail, booking, profileNam
             If you'd like to schedule a new meeting, please visit the booking page.
           </p>
           <p style="margin: 24px 0 0; color: #9e9e9e; font-size: 12px; text-align: center;">
-            This is an automated notification from Lumi.
+            This is an automated notification from MeetsGo.
           </p>
         </div>
       </div>
@@ -131,7 +131,7 @@ async function sendBookingCancelledNotification(bookerEmail, booking, profileNam
   `;
 
   await t.sendMail({
-    from: `Lumi <${getFromAddress()}>`,
+    from: `MeetsGo <${getFromAddress()}>`,
     to: bookerEmail,
     subject: `Booking cancelled: ${booking.title} - ${dateStr}`,
     html,

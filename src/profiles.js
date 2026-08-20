@@ -340,6 +340,10 @@ function registerProfileRoutes(app) {
           btn.addEventListener('click', function() {
             const day = this.closest('.schedule-action-btn').dataset.day || this.dataset.day;
             const container = document.getElementById('default-container-' + day);
+            if (container.querySelectorAll('.time-range').length >= 10) {
+              Toast.show('Maximum 10 time ranges per day', 'warning');
+              return;
+            }
             container.appendChild(makeDefaultTimeRange(day, '09:00', '17:00'));
           });
         });
@@ -400,8 +404,8 @@ function registerProfileRoutes(app) {
       const ends = request.body[`${key}[end][]`];
       if (!starts || !ends) continue;
 
-      const startArr = Array.isArray(starts) ? starts : [starts];
-      const endArr = Array.isArray(ends) ? ends : [ends];
+      const startArr = Array.isArray(starts) ? starts.slice(0, 10) : [starts];
+      const endArr = Array.isArray(ends) ? ends.slice(0, 10) : [ends];
 
       for (let i = 0; i < startArr.length; i++) {
         if (startArr[i] && endArr[i]) {

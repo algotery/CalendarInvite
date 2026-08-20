@@ -201,7 +201,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <div class="field-group">
                 <span class="field-label">Time between meetings</span>
                 <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-                  <div style="display: flex; align-items: center; gap: 8px; background: var(--neutral-10); border: 1px solid var(--neutral-30); border-radius: 8px; padding: 10px 16px;">
+                  <div class="duration-add-input-wrap">
                     <input
                       type="number"
                       id="buffer_time_minutes"
@@ -216,7 +216,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
                     ${[0, 5, 10, 15, 30].map(v => `
                       <button type="button"
                         onclick="document.getElementById('buffer_time_minutes').value=${v}"
-                        style="padding: 6px 14px; font-size: 13px; font-weight: 600; border-radius: 20px; border: 1.5px solid var(--neutral-30); background: ${(profile?.buffer_time_minutes ?? 0) == v ? 'var(--primary)' : 'var(--neutral-0)'}; color: ${(profile?.buffer_time_minutes ?? 0) == v ? '#fff' : 'var(--text-secondary)'}; cursor: pointer; transition: all 0.15s;">
+                        class="buffer-preset-btn${(profile?.buffer_time_minutes ?? 0) == v ? ' active' : ''}">
                         ${v === 0 ? 'None' : v + ' min'}
                       </button>`).join('')}
                   </div>
@@ -716,6 +716,10 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
           btn.addEventListener('click', (e) => {
             const day = e.target.closest('.schedule-action-btn').dataset.day;
             const container = document.getElementById('container-' + day);
+            if (container.querySelectorAll('.time-range').length >= 10) {
+              Toast.show('Maximum 10 time ranges per day', 'warning');
+              return;
+            }
             container.appendChild(makeProfileTimeRange(day, '09:00', '17:00'));
           });
         });

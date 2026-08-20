@@ -60,7 +60,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
     (function(){var isBooking=document.querySelector('meta[name="booking-page"]');var key=isBooking?'booking-theme':'theme';var t=localStorage.getItem(key);if(t==='dark')document.documentElement.setAttribute('data-theme','dark');})();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${title} - Lumi</title>
+  <title>${title} - MeetsGo</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
