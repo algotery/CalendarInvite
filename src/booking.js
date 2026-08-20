@@ -1,254 +1,16 @@
 const crypto = require('node:crypto');
-const { decrypt } = require('./encryption');
-const { refreshAccessToken: refreshGoogleToken } = require('./google');
-const { createMicrosoftClient } = require('./microsoft');
-const { getZohoClient } = require('./zoho');
-const { optimizedCleanupOldRateLimits } = require('./performance-fixes');
 const { sendNewBookingNotification, sendBookingCancelledNotification } = require('./mailer');
 const { TIMEZONES } = require('./views/layout');
-
-async function getValidTokenForConnection(db, encryptionKey, connection) {
-  const expiry = new Date(connection.token_expiry || 0);
-  if (expiry > new Date()) {
-    try {
-      return decrypt(connection.encrypted_access_token, encryptionKey);
-    } catch {
-      return connection.encrypted_access_token;
-    }
-  }
-
-  if (connection.provider === 'google') {
-    return await refreshGoogleToken(db, encryptionKey, connection.id, process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
-  } else if (connection.provider === 'microsoft') {
-    const client = createMicrosoftClient({ db, encryptionKey, clientId: process.env.MICROSOFT_CLIENT_ID, clientSecret: process.env.MICROSOFT_CLIENT_SECRET, tenantId: process.env.MICROSOFT_TENANT_ID || 'common' });
-    return await client.getValidAccessToken(connection.id);
-  } else if (connection.provider === 'zoho') {
-    const client = getZohoClient({ db, encryptionKey, clientId: process.env.ZOHO_CLIENT_ID, clientSecret: process.env.ZOHO_CLIENT_SECRET });
-    return await client.getAccessToken(connection.id);
-  }
-  throw new Error('Unknown provider');
-}
+const { computeSlots, removeConflicts, getExistingBookings, HORIZON_MS } = require('./services/slot-calculator');
+const { getValidTokenForConnection, getCalendarBusySlots, createCalendarEvent, deleteCalendarEvent, fetchWithTimeout } = require('./services/calendar-service');
+const { checkIpRateLimit, recordIpRequest, checkEmailRateLimit, recordEmailBooking, getClientIp, registerRateLimitHook } = require('./services/rate-limiter');
 
 const VALID_DURATIONS = [30, 45, 60];
-const LEAD_TIME_MS = 2 * 60 * 60 * 1000;
-const HORIZON_MS = 90 * 24 * 60 * 60 * 1000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const IP_RATE_LIMIT = 20;
-const IP_RATE_WINDOW_MS = 60 * 1000;
-const EMAIL_RATE_LIMIT = 5;
-const EMAIL_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function escapeHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-async function computeSlots(db, profileId, dateStr, durationMinutes, now) {
-  const date = new Date(dateStr + 'T00:00:00.000Z');
-  const dayOfWeek = date.getUTCDay();
-
-  const override = await db.getOne(
-    "SELECT * FROM schedule_overrides WHERE profile_id = $1 AND date = $2",
-    [profileId, dateStr]
-  );
-
-  let ranges;
-  if (override) {
-    if (override.is_blocked) return [];
-    if (override.custom_ranges) {
-      ranges = JSON.parse(override.custom_ranges);
-    } else {
-      ranges = [];
-    }
-  } else {
-    const templates = await db.getAll(
-      "SELECT start_time, end_time FROM schedule_templates WHERE profile_id = $1 AND day_of_week = $2 ORDER BY start_time",
-      [profileId, dayOfWeek]
-    );
-    ranges = templates.map(t => ({ start: t.start_time, end: t.end_time }));
-  }
-
-  if (ranges.length === 0) return [];
-
-  const slots = [];
-  const durationMs = durationMinutes * 60 * 1000;
-  const leadTimeCutoff = new Date(now.getTime() + LEAD_TIME_MS);
-  const horizonCutoff = new Date(now.getTime() + HORIZON_MS);
-
-  for (const range of ranges) {
-    const [startH, startM] = range.start.split(':').map(Number);
-    const [endH, endM] = range.end.split(':').map(Number);
-
-    const rangeStart = new Date(date);
-    rangeStart.setUTCHours(startH, startM, 0, 0);
-    const rangeEnd = new Date(date);
-    rangeEnd.setUTCHours(endH, endM, 0, 0);
-
-    let slotStart = rangeStart.getTime();
-    while (slotStart + durationMs <= rangeEnd.getTime()) {
-      const slotStartDate = new Date(slotStart);
-      const slotEndDate = new Date(slotStart + durationMs);
-
-      if (slotStartDate >= leadTimeCutoff && slotStartDate < horizonCutoff) {
-        slots.push({
-          start: slotStartDate.toISOString(),
-          end: slotEndDate.toISOString(),
-        });
-      }
-      slotStart += 30 * 60 * 1000;
-    }
-  }
-
-  return slots;
-}
-
-function removeConflicts(slots, busyPeriods, bufferMs = 0) {
-  return slots.filter(slot => {
-    const slotStart = new Date(slot.start).getTime();
-    const slotEnd = new Date(slot.end).getTime();
-    for (const busy of busyPeriods) {
-      const busyStart = new Date(busy.start).getTime() - bufferMs;
-      const busyEnd = new Date(busy.end).getTime() + bufferMs;
-      if (slotStart < busyEnd && slotEnd > busyStart) {
-        return false;
-      }
-    }
-    return true;
-  });
-}
-
-const CALENDAR_API_TIMEOUT_MS = 8000;
-
-function fetchWithTimeout(fetchFn, url, options, timeoutMs = CALENDAR_API_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return fetchFn(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
-}
-
-async function getCalendarBusySlots(db, encryptionKey, profileId, dateStr, fetchFn) {
-  const readCalendars = await db.getAll(
-    "SELECT cc.* FROM profile_read_calendars prc JOIN calendar_connections cc ON prc.calendar_connection_id = cc.id WHERE prc.profile_id = $1 AND cc.status = 'connected'",
-    [profileId]
-  );
-
-  if (readCalendars.length === 0) return [];
-
-  const timeMin = dateStr + 'T00:00:00Z';
-  const timeMax = dateStr + 'T23:59:59Z';
-
-  const results = await Promise.allSettled(readCalendars.map(async (cal) => {
-    const accessToken = await getValidTokenForConnection(db, encryptionKey, cal);
-    const busy = [];
-
-    if (cal.provider === 'google') {
-      const response = await fetchWithTimeout(fetchFn, 'https://www.googleapis.com/calendar/v3/freeBusy', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          timeMin,
-          timeMax,
-          items: [{ id: 'primary' }],
-        }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        busy.push(...(data.calendars?.primary?.busy || []));
-      }
-    } else if (cal.provider === 'microsoft') {
-      const response = await fetchWithTimeout(fetchFn, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          schedules: [cal.email],
-          startTime: { dateTime: timeMin, timeZone: 'UTC' },
-          endTime: { dateTime: timeMax, timeZone: 'UTC' },
-        }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const scheduleItems = data.value?.[0]?.scheduleItems || [];
-        busy.push(...scheduleItems.map(item => ({
-          start: item.start.dateTime,
-          end: item.end.dateTime,
-        })));
-      }
-    } else if (cal.provider === 'zoho') {
-      const params = new URLSearchParams({ stime: timeMin, etime: timeMax });
-      const response = await fetchWithTimeout(fetchFn, `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`, {
-        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const fbData = data.fb_data || [];
-        busy.push(...fbData.filter(s => s.fbtype === 'busy').map(s => ({
-          start: s.s_datetime,
-          end: s.e_datetime,
-        })));
-      }
-    }
-
-    return busy;
-  }));
-
-  const allBusy = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      allBusy.push(...result.value);
-    }
-  }
-  return allBusy;
-}
-
-async function getExistingBookings(db, profileId, dateStr) {
-  const dayStart = dateStr + 'T00:00:00.000Z';
-  const dayEnd = dateStr + 'T23:59:59.999Z';
-  return await db.getAll(
-    "SELECT start_time as start, end_time as \"end\" FROM bookings WHERE profile_id = $1 AND status = 'confirmed' AND start_time >= $2 AND end_time <= $3",
-    [profileId, dayStart, dayEnd]
-  );
-}
-
-async function checkIpRateLimit(db, ip) {
-  const windowStart = new Date(Date.now() - IP_RATE_WINDOW_MS).toISOString();
-  const row = await db.getOne(
-    "SELECT COUNT(*) as cnt FROM rate_limits WHERE key = $1 AND type = 'ip' AND timestamp > $2",
-    [ip, windowStart]
-  );
-  return parseInt(row.cnt) >= IP_RATE_LIMIT;
-}
-
-async function recordIpRequest(db, ip, endpoint) {
-  await db.run(
-    "INSERT INTO rate_limits (key, type, endpoint, timestamp) VALUES ($1, 'ip', $2, $3)",
-    [ip, endpoint, new Date().toISOString()]
-  );
-}
-
-async function checkEmailRateLimit(db, email) {
-  const windowStart = new Date(Date.now() - EMAIL_RATE_WINDOW_MS).toISOString();
-  const row = await db.getOne(
-    "SELECT COUNT(*) as cnt FROM rate_limits WHERE key = $1 AND type = 'email' AND timestamp > $2",
-    [email, windowStart]
-  );
-  return parseInt(row.cnt) >= EMAIL_RATE_LIMIT;
-}
-
-async function recordEmailBooking(db, email, endpoint) {
-  await db.run(
-    "INSERT INTO rate_limits (key, type, endpoint, timestamp) VALUES ($1, 'email', $2, $3)",
-    [email, endpoint, new Date().toISOString()]
-  );
-}
-
-function getClientIp(request) {
-  return request.headers['x-forwarded-for']?.split(',')[0]?.trim() || request.ip || '127.0.0.1';
 }
 
 function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
@@ -855,17 +617,6 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
   });
 }
 
-function registerRateLimitHook(app) {
-  app.addHook('onRequest', async (request, reply) => {
-    if (request.method !== 'POST') return;
-    await optimizedCleanupOldRateLimits(app.db);
-    const ip = getClientIp(request);
-    if (await checkIpRateLimit(app.db, ip)) {
-      return reply.code(429).send({ error: 'Too many requests, please try again later' });
-    }
-    await recordIpRequest(app.db, ip, request.url);
-  });
-}
 
 function registerBusynessApi(app, { encryptionKey }) {
   app.get('/:slug/busyness', async (request, reply) => {
@@ -987,37 +738,6 @@ function registerSlotsApi(app, { encryptionKey }) {
   });
 }
 
-async function createCalendarEvent(fetchFn, db, encryptionKey, connection, eventData) {
-  const accessToken = await getValidTokenForConnection(db, encryptionKey, connection);
-
-  if (connection.provider === 'google') {
-    const event = { summary: eventData.title, description: eventData.description || '', start: { dateTime: eventData.start }, end: { dateTime: eventData.end }, attendees: eventData.attendees.map(email => ({ email })) };
-    const response = await fetchFn('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(event) });
-    if (!response.ok) { const errText = await response.text(); throw new Error(`Google event creation failed: ${errText}`); }
-    const data = await response.json();
-    return data.id;
-  } else if (connection.provider === 'microsoft') {
-    const body = { subject: eventData.title, start: { dateTime: eventData.start, timeZone: 'UTC' }, end: { dateTime: eventData.end, timeZone: 'UTC' }, attendees: eventData.attendees.map(email => ({ emailAddress: { address: email }, type: 'required' })), body: { contentType: 'Text', content: eventData.description || '' } };
-    const response = await fetchFn('https://graph.microsoft.com/v1.0/me/events', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!response.ok) throw new Error('Microsoft event creation failed');
-    const data = await response.json();
-    return data.id;
-  } else if (connection.provider === 'zoho') {
-    const calendarsResponse = await fetchFn('https://calendar.zoho.com/api/v1/calendars', { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
-    const calendarsData = await calendarsResponse.json();
-    const primaryCalendar = calendarsData.calendars.find(c => c.isprimary) || calendarsData.calendars[0];
-    const calendarUid = primaryCalendar.uid;
-    const pad = n => String(n).padStart(2, '0');
-    const formatZoho = (isoStr) => { const d = new Date(isoStr); return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}+0000`; };
-    const zohoBody = { eventdata: { title: eventData.title, description: eventData.description || '', start: formatZoho(eventData.start), end: formatZoho(eventData.end), attendees: eventData.attendees.map(email => ({ email })) } };
-    const response = await fetchFn(`https://calendar.zoho.com/api/v1/calendars/${calendarUid}/events`, { method: 'POST', headers: { Authorization: `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(zohoBody) });
-    if (!response.ok) throw new Error('Zoho event creation failed');
-    const result = await response.json();
-    return result.events[0].uid;
-  }
-
-  throw new Error(`Unsupported provider: ${connection.provider}`);
-}
 
 function registerBookingSubmitApi(app, { encryptionKey }) {
   app.post('/:slug', async (request, reply) => {
@@ -1119,21 +839,6 @@ function registerBookingSubmitApi(app, { encryptionKey }) {
   });
 }
 
-async function deleteCalendarEvent(fetchFn, db, encryptionKey, connection, calendarEventId) {
-  let accessToken;
-  try { accessToken = decrypt(connection.encrypted_access_token, encryptionKey); } catch { accessToken = connection.encrypted_access_token; }
-
-  if (connection.provider === 'google') {
-    await fetchFn(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${calendarEventId}?sendUpdates=all`, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } });
-  } else if (connection.provider === 'microsoft') {
-    await fetchFn(`https://graph.microsoft.com/v1.0/me/events/${calendarEventId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } });
-  } else if (connection.provider === 'zoho') {
-    const calendarsResponse = await fetchFn('https://calendar.zoho.com/api/v1/calendars', { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
-    const calendarsData = await calendarsResponse.json();
-    const primaryCalendar = calendarsData.calendars.find(c => c.isprimary) || calendarsData.calendars[0];
-    await fetchFn(`https://calendar.zoho.com/api/v1/calendars/${primaryCalendar.uid}/events/${calendarEventId}`, { method: 'DELETE', headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
-  }
-}
 
 function registerCancellationPage(app, { encryptionKey, baseLayout }) {
   app.get('/:token', async (request, reply) => {
@@ -1214,3 +919,4 @@ function registerCancellationApi(app, { encryptionKey }) {
 }
 
 module.exports = { registerBookingRoutes, registerSlotsApi, registerBusynessApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook, computeSlots, removeConflicts, getCalendarBusySlots, getExistingBookings, VALID_DURATIONS };
+

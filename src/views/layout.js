@@ -12,9 +12,7 @@ const TIMEZONES = [
   'Africa/Cairo', 'Africa/Johannesburg', 'Africa/Lagos',
 ];
 
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+const { escapeHtml } = require('../utils/html');
 
 const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage = false) => {
   const bodyClass = isBookingPage ? ' class="booking-page"' : '';
