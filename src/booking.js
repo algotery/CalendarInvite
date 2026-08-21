@@ -44,7 +44,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
     const availableDaysRows = await app.db.getAll("SELECT DISTINCT day_of_week FROM schedule_templates WHERE profile_id = $1", [profile.id]);
     const availableDays = availableDaysRows.map(r => r.day_of_week);
 
-    reply.type('text/html').send(baseLayout(`Book - ${escapeHtml(profile.name)}`, `
+    return reply.type('text/html').send(baseLayout(`Book - ${escapeHtml(profile.name)}`, `
       <header class="booking-header">
         <div class="booking-header-left">
           <a href="/" class="booking-header-logo">
@@ -93,6 +93,7 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
             </button>
 
             <div class="booking-profile-info">
+              ${profile.avatar_url ? `<div class="booking-profile-logo"><img src="${STATIC_URL}${escapeHtml(profile.avatar_url)}" alt="${escapeHtml(profile.name)}"></div>` : ''}
               <h1 class="booking-profile-title">${escapeHtml(profile.name)}</h1>
 
               <div class="booking-profile-meta">
@@ -886,7 +887,7 @@ function registerCancellationPage(app, { encryptionKey, baseLayout }) {
     const attendees = [booking.booker_email];
     if (booking.additional_attendees) { try { attendees.push(...JSON.parse(booking.additional_attendees)); } catch {} }
 
-    reply.type('text/html').send(baseLayout('Cancel Booking', `
+    return reply.type('text/html').send(baseLayout('Cancel Booking', `
       <div style="max-width: 600px; margin: 3rem auto;">
         <div style="margin-bottom: 0.5rem;"><i class="ph-duotone ph-warning-circle" style="font-size: 4rem; color: var(--error); display: block; margin: 0 auto 0.5rem auto;"></i></div>
         <h1 style="text-align: center; margin-bottom: 1rem; color: var(--error);">Cancel Booking</h1>

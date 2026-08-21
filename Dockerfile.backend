@@ -17,6 +17,8 @@ COPY src/ ./src/
 COPY public/ ./public/
 COPY scripts/ ./scripts/
 
+RUN mkdir -p /app/public/uploads/avatars && chown -R appuser:appgroup /app/public/uploads
+
 USER appuser
 
 EXPOSE 3000

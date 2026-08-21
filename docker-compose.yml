@@ -19,6 +19,8 @@ services:
       - ENTRY_MODE=all
     env_file:
       - .env
+    volumes:
+      - uploads:/app/public/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -39,7 +41,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -65,3 +67,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  uploads:

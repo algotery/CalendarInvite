@@ -135,6 +135,26 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
               <i class="ph-bold ph-caret-down modal-section-chevron"></i>
             </div>
             <div class="modal-section-content">
+              <div class="avatar-upload-section" ${!isEdit ? 'data-new-profile="1"' : ''}>
+                <div class="avatar-upload-container" id="avatar-upload-container">
+                  <div class="avatar-preview" id="avatar-preview">
+                    ${isEdit && profile.avatar_url
+                      ? `<img src="${escapeHtml(profile.avatar_url)}" alt="Profile logo" class="avatar-preview-img" id="avatar-img">`
+                      : `<div class="avatar-placeholder" id="avatar-placeholder"><i class="ph-bold ph-image"></i><span>Upload Logo</span></div>`
+                    }
+                    <div class="avatar-upload-overlay" id="avatar-overlay">
+                      <i class="ph-bold ph-upload-simple"></i>
+                      <span>${isEdit ? 'Change' : 'Upload'}</span>
+                    </div>
+                  </div>
+                  <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml" style="display:none">
+                </div>
+                <div class="avatar-upload-info">
+                  <span class="avatar-upload-label">Profile Logo</span>
+                  <span class="avatar-upload-hint">${isEdit ? 'Recommended: 400×100px or similar ratio, max 5MB' : 'You can upload a logo after creating the profile'}</span>
+                  ${isEdit && profile.avatar_url ? `<button type="button" class="avatar-remove-btn" id="avatar-remove-btn"><i class="ph ph-trash"></i> Remove</button>` : ''}
+                </div>
+              </div>
               <div class="float-field">
                 <input type="text" name="slug" value="${escapeHtml(profile?.slug || '')}" placeholder=" " required>
                 <label>Slug</label>
@@ -406,6 +426,113 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
     </div>
     <script>
       var APP_TIME_FORMAT = '${timeFormat}';
+
+      // Avatar upload
+      (function() {
+        var container = document.getElementById('avatar-upload-container');
+        if (!container) return;
+        var fileInput = document.getElementById('avatar-file-input');
+        var preview = document.getElementById('avatar-preview');
+        var overlay = document.getElementById('avatar-overlay');
+        var removeBtn = document.getElementById('avatar-remove-btn');
+        var profileId = '${isEdit ? profile.id : ''}';
+        var isNewProfile = !profileId;
+
+        if (isNewProfile) {
+          container.addEventListener('click', function() {
+            Toast.show('Save the profile first, then upload a logo.', 'info');
+          });
+          return;
+        }
+
+        container.addEventListener('click', function() { fileInput.click(); });
+
+        container.addEventListener('dragover', function(e) {
+          e.preventDefault();
+          container.classList.add('dragover');
+        });
+        container.addEventListener('dragleave', function() {
+          container.classList.remove('dragover');
+        });
+        container.addEventListener('drop', function(e) {
+          e.preventDefault();
+          container.classList.remove('dragover');
+          if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+        });
+
+        fileInput.addEventListener('change', function() {
+          if (fileInput.files.length) uploadFile(fileInput.files[0]);
+        });
+
+        function uploadFile(file) {
+          if (file.size > 5 * 1024 * 1024) {
+            Toast.show('File too large. Maximum 5MB.', 'error');
+            return;
+          }
+          if (!['image/jpeg','image/png','image/webp','image/gif'].includes(file.type)) {
+            Toast.show('Invalid file type. Use JPEG, PNG, WebP or GIF.', 'error');
+            return;
+          }
+
+          container.classList.add('uploading');
+          var formData = new FormData();
+          formData.append('file', file);
+
+          fetch('/admin/profiles/' + profileId + '/avatar', {
+            method: 'POST',
+            body: formData
+          })
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            container.classList.remove('uploading');
+            if (data.error) {
+              Toast.show(data.error, 'error');
+              return;
+            }
+            var img = document.getElementById('avatar-img');
+            if (img) {
+              img.src = data.avatar_url + '?t=' + Date.now();
+            } else {
+              preview.innerHTML = '<img src="' + data.avatar_url + '?t=' + Date.now() + '" alt="Profile avatar" class="avatar-preview-img" id="avatar-img">' +
+                '<div class="avatar-upload-overlay" id="avatar-overlay"><i class="ph-bold ph-camera"></i></div>';
+            }
+            container.classList.add('upload-success');
+            setTimeout(function() { container.classList.remove('upload-success'); }, 1200);
+
+            if (!document.getElementById('avatar-remove-btn')) {
+              var info = container.parentElement.querySelector('.avatar-upload-info');
+              var btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'avatar-remove-btn';
+              btn.id = 'avatar-remove-btn';
+              btn.innerHTML = '<i class="ph ph-trash"></i> Remove';
+              btn.addEventListener('click', handleRemove);
+              info.appendChild(btn);
+            }
+          })
+          .catch(function() {
+            container.classList.remove('uploading');
+            Toast.show('Upload failed. Please try again.', 'error');
+          });
+        }
+
+        function handleRemove(e) {
+          e.stopPropagation();
+          fetch('/admin/profiles/' + profileId + '/avatar/delete', { method: 'POST' })
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            if (data.success) {
+              preview.innerHTML = '<div class="avatar-placeholder" id="avatar-placeholder"><i class="ph-bold ph-user"></i></div>' +
+                '<div class="avatar-upload-overlay" id="avatar-overlay"><i class="ph-bold ph-camera"></i></div>';
+              var btn = document.getElementById('avatar-remove-btn');
+              if (btn) btn.remove();
+            }
+          });
+        }
+
+        if (removeBtn) removeBtn.addEventListener('click', handleRemove);
+      })();
+
       function toggleSection(header) {
         const section = header.closest('.modal-section');
         const wasOpen = section.classList.contains('open');

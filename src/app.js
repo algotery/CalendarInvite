@@ -5,6 +5,7 @@ const cookie = require('@fastify/cookie');
 const session = require('@fastify/session');
 const csrf = require('@fastify/csrf-protection');
 const fastifyStatic = require('@fastify/static');
+const multipart = require('@fastify/multipart');
 const { createDatabase } = require('./db');
 const { registerProfileRoutes } = require('./profiles');
 const { registerBookingRoutes, registerSlotsApi, registerBusynessApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook } = require('./booking');
@@ -53,6 +54,7 @@ async function buildApp(opts = {}) {
   }
 
   app.register(formbody);
+  app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } });
   app.register(cookie);
   const sessionSecret = opts.sessionSecret || process.env.SESSION_SECRET;
   if (!sessionSecret) {

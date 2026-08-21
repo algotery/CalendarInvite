@@ -2,6 +2,7 @@ const { escapeHtml } = require('./utils/html');
 const { convertUTCToLocalTime, convertTimeToUTC } = require('./utils/time');
 const { parseScheduleFromBody, parseAttendeesFromBody, parseOverridesFromBody } = require('./utils/parse');
 const { profileFormHtml, DAYS } = require('./views/profile-form');
+const { saveAvatar, deleteAvatar } = require('./services/storage');
 
 const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -206,17 +207,22 @@ function registerProfileRoutes(app) {
             const menu = document.getElementById('menu-' + profileId);
             const isVisible = menu.style.display === 'block';
 
-            // Close all menus
+            // Close all menus and remove menu-open class
             document.querySelectorAll('.dropdown-menu').forEach(m => m.style.display = 'none');
+            document.querySelectorAll('.profile-card.menu-open').forEach(c => c.classList.remove('menu-open'));
 
             // Toggle current menu
-            menu.style.display = isVisible ? 'none' : 'block';
+            if (!isVisible) {
+              menu.style.display = 'block';
+              this.closest('.profile-card').classList.add('menu-open');
+            }
           });
         });
 
         // Close dropdown when clicking outside
         document.addEventListener('click', () => {
           document.querySelectorAll('.dropdown-menu').forEach(m => m.style.display = 'none');
+          document.querySelectorAll('.profile-card.menu-open').forEach(c => c.classList.remove('menu-open'));
         });
 
         // Custom time dropdown logic for default availability
@@ -390,7 +396,7 @@ function registerProfileRoutes(app) {
       </script>
     `;
 
-    reply.type('text/html').send(require('./app').BASE_LAYOUT('Profiles', html, true, 'profiles'));
+    return reply.type('text/html').send(require('./app').BASE_LAYOUT('Profiles', html, true, 'profiles'));
   });
 
   app.post('/profiles/default-availability', { preHandler: app.csrfProtection }, async (request, reply) => {
@@ -654,8 +660,63 @@ function registerProfileRoutes(app) {
     if (!profile) {
       return reply.code(404).type('text/html').send(require('./app').BASE_LAYOUT('Not Found', '<h1>Profile not found</h1>'));
     }
+    if (profile.avatar_url) deleteAvatar(profile.avatar_url);
     await app.db.run("DELETE FROM booking_profiles WHERE id = $1 AND user_id = $2", [id, adminId]);
     return reply.redirect('/admin/profiles');
+  });
+
+  app.post('/profiles/:id/avatar', async (request, reply) => {
+    const { id } = request.params;
+    const adminId = request.session.get('adminId');
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE id = $1 AND user_id = $2", [id, adminId]);
+    if (!profile) {
+      return reply.code(404).send({ error: 'Profile not found' });
+    }
+
+    let file;
+    try {
+      file = await request.file();
+    } catch (err) {
+      return reply.code(400).send({ error: 'Upload error: ' + err.message });
+    }
+
+    if (!file) {
+      return reply.code(400).send({ error: 'No file uploaded' });
+    }
+
+    const chunks = [];
+    for await (const chunk of file.file) {
+      chunks.push(chunk);
+    }
+    const buffer = Buffer.concat(chunks);
+
+    if (file.file.truncated) {
+      return reply.code(400).send({ error: 'File too large. Maximum size is 5MB' });
+    }
+
+    try {
+      if (profile.avatar_url) deleteAvatar(profile.avatar_url);
+      const avatarUrl = await saveAvatar(buffer, file.mimetype, id);
+      await app.db.run("UPDATE booking_profiles SET avatar_url = $1 WHERE id = $2", [avatarUrl, id]);
+      return { success: true, avatar_url: avatarUrl };
+    } catch (err) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+
+  app.post('/profiles/:id/avatar/delete', async (request, reply) => {
+    const { id } = request.params;
+    const adminId = request.session.get('adminId');
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE id = $1 AND user_id = $2", [id, adminId]);
+    if (!profile) {
+      return reply.code(404).send({ error: 'Profile not found' });
+    }
+
+    if (profile.avatar_url) {
+      deleteAvatar(profile.avatar_url);
+      await app.db.run("UPDATE booking_profiles SET avatar_url = NULL WHERE id = $1", [id]);
+    }
+    return { success: true };
   });
 }
 
