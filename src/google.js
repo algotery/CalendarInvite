@@ -6,9 +6,13 @@ const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
 const GOOGLE_FREEBUSY_URL = 'https://www.googleapis.com/calendar/v3/freeBusy';
 const GOOGLE_EVENTS_URL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all';
 
-const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar.events'];
+const SCOPES = [
+  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/calendar.events',
+  'email',
+];
 
-function buildGoogleAuthUrl(clientId, redirectUri) {
+function buildGoogleAuthUrl(clientId, redirectUri, state) {
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -16,7 +20,7 @@ function buildGoogleAuthUrl(clientId, redirectUri) {
     scope: SCOPES.join(' '),
     access_type: 'offline',
     prompt: 'consent',
-    state: 'google',
+    state: state || 'google',
   });
   return `${GOOGLE_AUTH_URL}?${params.toString()}`;
 }
@@ -56,7 +60,7 @@ async function getGoogleUserEmail(accessToken) {
 }
 
 async function refreshAccessToken(db, encryptionKey, connectionId, clientId, clientSecret) {
-  const conn = db.prepare('SELECT * FROM calendar_connections WHERE id = ?').get(connectionId);
+  const conn = await db.getOne('SELECT * FROM calendar_connections WHERE id = $1', [connectionId]);
   if (!conn) throw new Error('Connection not found');
 
   const refreshToken = decrypt(conn.encrypted_refresh_token, encryptionKey);
@@ -73,7 +77,7 @@ async function refreshAccessToken(db, encryptionKey, connectionId, clientId, cli
   });
 
   if (!response.ok) {
-    db.prepare('UPDATE calendar_connections SET status = ? WHERE id = ?').run('expired', connectionId);
+    await db.run('UPDATE calendar_connections SET status = $1 WHERE id = $2', ['expired', connectionId]);
     throw new Error('Token refresh failed');
   }
 
@@ -81,14 +85,16 @@ async function refreshAccessToken(db, encryptionKey, connectionId, clientId, cli
   const newExpiry = new Date(Date.now() + data.expires_in * 1000).toISOString();
   const encryptedAccess = encrypt(data.access_token, encryptionKey);
 
-  db.prepare('UPDATE calendar_connections SET encrypted_access_token = ?, token_expiry = ?, status = ? WHERE id = ?')
-    .run(encryptedAccess, newExpiry, 'connected', connectionId);
+  await db.run(
+    'UPDATE calendar_connections SET encrypted_access_token = $1, token_expiry = $2, status = $3 WHERE id = $4',
+    [encryptedAccess, newExpiry, 'connected', connectionId]
+  );
 
   return data.access_token;
 }
 
 async function getValidAccessToken(db, encryptionKey, connectionId, clientId, clientSecret) {
-  const conn = db.prepare('SELECT * FROM calendar_connections WHERE id = ?').get(connectionId);
+  const conn = await db.getOne('SELECT * FROM calendar_connections WHERE id = $1', [connectionId]);
   if (!conn) throw new Error('Connection not found');
 
   const expiry = new Date(conn.token_expiry);

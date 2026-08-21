@@ -4,7 +4,7 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
   const fetcher = fetchFn || globalThis.fetch;
 
   async function getAccessToken(connectionId) {
-    const conn = db.prepare('SELECT * FROM calendar_connections WHERE id = ?').get(connectionId);
+    const conn = await db.getOne('SELECT * FROM calendar_connections WHERE id = $1', [connectionId]);
     if (!conn) throw new Error(`Connection ${connectionId} not found`);
 
     const now = new Date();
@@ -27,16 +27,17 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
     });
 
     if (!response.ok) {
-      db.prepare('UPDATE calendar_connections SET status = ? WHERE id = ?').run('expired', connectionId);
+      await db.run('UPDATE calendar_connections SET status = $1 WHERE id = $2', ['expired', connectionId]);
       throw new Error('Failed to refresh Zoho token');
     }
 
     const data = await response.json();
     const newExpiry = new Date(Date.now() + data.expires_in * 1000).toISOString();
 
-    db.prepare(
-      'UPDATE calendar_connections SET encrypted_access_token = ?, token_expiry = ?, status = ? WHERE id = ?'
-    ).run(encrypt(data.access_token, encryptionKey), newExpiry, 'connected', connectionId);
+    await db.run(
+      'UPDATE calendar_connections SET encrypted_access_token = $1, token_expiry = $2, status = $3 WHERE id = $4',
+      [encrypt(data.access_token, encryptionKey), newExpiry, 'connected', connectionId]
+    );
 
     return data.access_token;
   }
@@ -114,7 +115,6 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
 }
 
 function parseZohoDateTime(dateStr) {
-  // Format: 20260701T090000+0000
   const match = dateStr.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})$/);
   if (!match) return dateStr;
   const [, year, month, day, hour, minute, second, tz] = match;

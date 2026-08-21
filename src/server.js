@@ -1,14 +1,25 @@
-require('dotenv').config();
+const config = require('./config');
 const { buildApp } = require('./app');
 
-const port = parseInt(process.env.PORT, 10) || 3000;
-const host = process.env.HOST || '0.0.0.0';
+async function start() {
+  const app = await buildApp({ logger: true });
 
-const app = buildApp({ logger: true });
+  app.listen({ port: config.port, host: config.host }, (err) => {
+    if (err) {
+      app.log.error(err);
+      process.exit(1);
+    }
+  });
 
-app.listen({ port, host }, (err) => {
-  if (err) {
-    app.log.error(err);
-    process.exit(1);
-  }
-});
+  process.on('SIGTERM', async () => {
+    await app.close();
+    process.exit(0);
+  });
+
+  process.on('SIGINT', async () => {
+    await app.close();
+    process.exit(0);
+  });
+}
+
+start();

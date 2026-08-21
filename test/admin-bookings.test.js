@@ -167,7 +167,7 @@ describe('Admin Bookings List - GET /admin/bookings', () => {
 
     const response = await app.inject({
       method: 'GET',
-      url: '/admin/bookings',
+      url: '/admin/bookings?filter=all',
       headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
     });
 
@@ -196,7 +196,7 @@ describe('Admin Bookings List - GET /admin/bookings', () => {
 
     const response = await app.inject({
       method: 'GET',
-      url: '/admin/bookings',
+      url: '/admin/bookings?filter=all',
       headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
     });
 
@@ -221,7 +221,7 @@ describe('Admin Bookings List - GET /admin/bookings', () => {
     // Filter by confirmed
     const confirmed = await app.inject({
       method: 'GET',
-      url: '/admin/bookings?status=confirmed',
+      url: '/admin/bookings?filter=all&status=confirmed',
       headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
     });
     assert.ok(confirmed.body.includes('Confirmed Person'));
@@ -230,7 +230,7 @@ describe('Admin Bookings List - GET /admin/bookings', () => {
     // Filter by cancelled
     const cancelled = await app.inject({
       method: 'GET',
-      url: '/admin/bookings?status=cancelled',
+      url: '/admin/bookings?filter=all&status=cancelled',
       headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
     });
     assert.ok(cancelled.body.includes('Cancelled Person'));
@@ -249,7 +249,7 @@ describe('Admin Bookings List - GET /admin/bookings', () => {
 
     const response = await app.inject({
       method: 'GET',
-      url: `/admin/bookings?profile_id=${profileId1}`,
+      url: `/admin/bookings?filter=all&profile_id=${profileId1}`,
       headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
     });
 
@@ -267,7 +267,7 @@ describe('Admin Bookings List - GET /admin/bookings', () => {
 
     const response = await app.inject({
       method: 'GET',
-      url: '/admin/bookings',
+      url: '/admin/bookings?filter=all',
       headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
     });
 
@@ -322,7 +322,7 @@ describe('Admin Booking Cancellation - POST /admin/bookings/:id/cancel', () => {
     deleteEventCalled = false;
     deletedEventId = null;
 
-    const { csrf, cookies } = await getCsrfAndCookies(app, '/admin/bookings', sessionCookies);
+    const { csrf, cookies } = await getCsrfAndCookies(app, '/admin/bookings?filter=all', sessionCookies);
 
     const response = await app.inject({
       method: 'POST',

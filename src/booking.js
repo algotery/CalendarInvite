@@ -1,9 +1,37 @@
 const crypto = require('node:crypto');
 const { decrypt } = require('./encryption');
+const { refreshAccessToken: refreshGoogleToken } = require('./google');
+const { createMicrosoftClient } = require('./microsoft');
+const { getZohoClient } = require('./zoho');
+const { optimizedCleanupOldRateLimits } = require('./performance-fixes');
+const { sendNewBookingNotification, sendBookingCancelledNotification } = require('./mailer');
+const { TIMEZONES } = require('./views/layout');
+
+async function getValidTokenForConnection(db, encryptionKey, connection) {
+  const expiry = new Date(connection.token_expiry || 0);
+  if (expiry > new Date()) {
+    try {
+      return decrypt(connection.encrypted_access_token, encryptionKey);
+    } catch {
+      return connection.encrypted_access_token;
+    }
+  }
+
+  if (connection.provider === 'google') {
+    return await refreshGoogleToken(db, encryptionKey, connection.id, process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+  } else if (connection.provider === 'microsoft') {
+    const client = createMicrosoftClient({ db, encryptionKey, clientId: process.env.MICROSOFT_CLIENT_ID, clientSecret: process.env.MICROSOFT_CLIENT_SECRET, tenantId: process.env.MICROSOFT_TENANT_ID || 'common' });
+    return await client.getValidAccessToken(connection.id);
+  } else if (connection.provider === 'zoho') {
+    const client = getZohoClient({ db, encryptionKey, clientId: process.env.ZOHO_CLIENT_ID, clientSecret: process.env.ZOHO_CLIENT_SECRET });
+    return await client.getAccessToken(connection.id);
+  }
+  throw new Error('Unknown provider');
+}
 
 const VALID_DURATIONS = [30, 45, 60];
 const LEAD_TIME_MS = 2 * 60 * 60 * 1000;
-const HORIZON_MS = 4 * 7 * 24 * 60 * 60 * 1000;
+const HORIZON_MS = 90 * 24 * 60 * 60 * 1000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const IP_RATE_LIMIT = 20;
@@ -16,13 +44,14 @@ function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function computeSlots(db, profileId, dateStr, durationMinutes, now) {
+async function computeSlots(db, profileId, dateStr, durationMinutes, now) {
   const date = new Date(dateStr + 'T00:00:00.000Z');
   const dayOfWeek = date.getUTCDay();
 
-  const override = db.prepare(
-    "SELECT * FROM schedule_overrides WHERE profile_id = ? AND date = ?"
-  ).get(profileId, dateStr);
+  const override = await db.getOne(
+    "SELECT * FROM schedule_overrides WHERE profile_id = $1 AND date = $2",
+    [profileId, dateStr]
+  );
 
   let ranges;
   if (override) {
@@ -33,9 +62,10 @@ function computeSlots(db, profileId, dateStr, durationMinutes, now) {
       ranges = [];
     }
   } else {
-    const templates = db.prepare(
-      "SELECT start_time, end_time FROM schedule_templates WHERE profile_id = ? AND day_of_week = ? ORDER BY start_time"
-    ).all(profileId, dayOfWeek);
+    const templates = await db.getAll(
+      "SELECT start_time, end_time FROM schedule_templates WHERE profile_id = $1 AND day_of_week = $2 ORDER BY start_time",
+      [profileId, dayOfWeek]
+    );
     ranges = templates.map(t => ({ start: t.start_time, end: t.end_time }));
   }
 
@@ -73,13 +103,13 @@ function computeSlots(db, profileId, dateStr, durationMinutes, now) {
   return slots;
 }
 
-function removeConflicts(slots, busyPeriods) {
+function removeConflicts(slots, busyPeriods, bufferMs = 0) {
   return slots.filter(slot => {
     const slotStart = new Date(slot.start).getTime();
     const slotEnd = new Date(slot.end).getTime();
     for (const busy of busyPeriods) {
-      const busyStart = new Date(busy.start).getTime();
-      const busyEnd = new Date(busy.end).getTime();
+      const busyStart = new Date(busy.start).getTime() - bufferMs;
+      const busyEnd = new Date(busy.end).getTime() + bufferMs;
       if (slotStart < busyEnd && slotEnd > busyStart) {
         return false;
       }
@@ -88,127 +118,133 @@ function removeConflicts(slots, busyPeriods) {
   });
 }
 
+const CALENDAR_API_TIMEOUT_MS = 8000;
+
+function fetchWithTimeout(fetchFn, url, options, timeoutMs = CALENDAR_API_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetchFn(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function getCalendarBusySlots(db, encryptionKey, profileId, dateStr, fetchFn) {
-  const readCalendars = db.prepare(
-    "SELECT cc.* FROM profile_read_calendars prc JOIN calendar_connections cc ON prc.calendar_connection_id = cc.id WHERE prc.profile_id = ? AND cc.status = 'connected'"
-  ).all(profileId);
+  const readCalendars = await db.getAll(
+    "SELECT cc.* FROM profile_read_calendars prc JOIN calendar_connections cc ON prc.calendar_connection_id = cc.id WHERE prc.profile_id = $1 AND cc.status = 'connected'",
+    [profileId]
+  );
 
   if (readCalendars.length === 0) return [];
 
   const timeMin = dateStr + 'T00:00:00Z';
   const timeMax = dateStr + 'T23:59:59Z';
+
+  const results = await Promise.allSettled(readCalendars.map(async (cal) => {
+    const accessToken = await getValidTokenForConnection(db, encryptionKey, cal);
+    const busy = [];
+
+    if (cal.provider === 'google') {
+      const response = await fetchWithTimeout(fetchFn, 'https://www.googleapis.com/calendar/v3/freeBusy', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          timeMin,
+          timeMax,
+          items: [{ id: 'primary' }],
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        busy.push(...(data.calendars?.primary?.busy || []));
+      }
+    } else if (cal.provider === 'microsoft') {
+      const response = await fetchWithTimeout(fetchFn, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          schedules: [cal.email],
+          startTime: { dateTime: timeMin, timeZone: 'UTC' },
+          endTime: { dateTime: timeMax, timeZone: 'UTC' },
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const scheduleItems = data.value?.[0]?.scheduleItems || [];
+        busy.push(...scheduleItems.map(item => ({
+          start: item.start.dateTime,
+          end: item.end.dateTime,
+        })));
+      }
+    } else if (cal.provider === 'zoho') {
+      const params = new URLSearchParams({ stime: timeMin, etime: timeMax });
+      const response = await fetchWithTimeout(fetchFn, `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`, {
+        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const fbData = data.fb_data || [];
+        busy.push(...fbData.filter(s => s.fbtype === 'busy').map(s => ({
+          start: s.s_datetime,
+          end: s.e_datetime,
+        })));
+      }
+    }
+
+    return busy;
+  }));
+
   const allBusy = [];
-
-  for (const cal of readCalendars) {
-    try {
-      let accessToken;
-      try {
-        accessToken = decrypt(cal.encrypted_access_token, encryptionKey);
-      } catch {
-        accessToken = cal.encrypted_access_token;
-      }
-
-      if (cal.provider === 'google') {
-        const response = await fetchFn('https://www.googleapis.com/calendar/v3/freeBusy', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            timeMin,
-            timeMax,
-            items: [{ id: 'primary' }],
-          }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          const busy = data.calendars?.primary?.busy || [];
-          allBusy.push(...busy);
-        }
-      } else if (cal.provider === 'microsoft') {
-        const response = await fetchFn('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            schedules: [cal.email],
-            startTime: { dateTime: timeMin, timeZone: 'UTC' },
-            endTime: { dateTime: timeMax, timeZone: 'UTC' },
-          }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          const scheduleItems = data.value?.[0]?.scheduleItems || [];
-          allBusy.push(...scheduleItems.map(item => ({
-            start: item.start.dateTime,
-            end: item.end.dateTime,
-          })));
-        }
-      } else if (cal.provider === 'zoho') {
-        const params = new URLSearchParams({ stime: timeMin, etime: timeMax });
-        const response = await fetchFn(
-          `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`,
-          { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } }
-        );
-        if (response.ok) {
-          const data = await response.json();
-          const fbData = data.fb_data || [];
-          allBusy.push(...fbData.filter(s => s.fbtype === 'busy').map(s => ({
-            start: s.s_datetime,
-            end: s.e_datetime,
-          })));
-        }
-      }
-    } catch {
-      // Skip calendar errors gracefully
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      allBusy.push(...result.value);
     }
   }
-
   return allBusy;
 }
 
-function getExistingBookings(db, profileId, dateStr) {
+async function getExistingBookings(db, profileId, dateStr) {
   const dayStart = dateStr + 'T00:00:00.000Z';
   const dayEnd = dateStr + 'T23:59:59.999Z';
-  return db.prepare(
-    "SELECT start_time as start, end_time as end FROM bookings WHERE profile_id = ? AND status = 'confirmed' AND start_time >= ? AND end_time <= ?"
-  ).all(profileId, dayStart, dayEnd);
+  return await db.getAll(
+    "SELECT start_time as start, end_time as \"end\" FROM bookings WHERE profile_id = $1 AND status = 'confirmed' AND start_time >= $2 AND end_time <= $3",
+    [profileId, dayStart, dayEnd]
+  );
 }
 
-function cleanupOldRateLimits(db) {
-  const cutoff = new Date(Date.now() - EMAIL_RATE_WINDOW_MS).toISOString();
-  db.prepare("DELETE FROM rate_limits WHERE timestamp < ?").run(cutoff);
-}
-
-function checkIpRateLimit(db, ip) {
+async function checkIpRateLimit(db, ip) {
   const windowStart = new Date(Date.now() - IP_RATE_WINDOW_MS).toISOString();
-  const count = db.prepare(
-    "SELECT COUNT(*) as cnt FROM rate_limits WHERE key = ? AND type = 'ip' AND timestamp > ?"
-  ).get(ip, windowStart).cnt;
-  return count >= IP_RATE_LIMIT;
+  const row = await db.getOne(
+    "SELECT COUNT(*) as cnt FROM rate_limits WHERE key = $1 AND type = 'ip' AND timestamp > $2",
+    [ip, windowStart]
+  );
+  return parseInt(row.cnt) >= IP_RATE_LIMIT;
 }
 
-function recordIpRequest(db, ip, endpoint) {
-  db.prepare(
-    "INSERT INTO rate_limits (key, type, endpoint, timestamp) VALUES (?, 'ip', ?, ?)"
-  ).run(ip, endpoint, new Date().toISOString());
+async function recordIpRequest(db, ip, endpoint) {
+  await db.run(
+    "INSERT INTO rate_limits (key, type, endpoint, timestamp) VALUES ($1, 'ip', $2, $3)",
+    [ip, endpoint, new Date().toISOString()]
+  );
 }
 
-function checkEmailRateLimit(db, email) {
+async function checkEmailRateLimit(db, email) {
   const windowStart = new Date(Date.now() - EMAIL_RATE_WINDOW_MS).toISOString();
-  const count = db.prepare(
-    "SELECT COUNT(*) as cnt FROM rate_limits WHERE key = ? AND type = 'email' AND timestamp > ?"
-  ).get(email, windowStart).cnt;
-  return count >= EMAIL_RATE_LIMIT;
+  const row = await db.getOne(
+    "SELECT COUNT(*) as cnt FROM rate_limits WHERE key = $1 AND type = 'email' AND timestamp > $2",
+    [email, windowStart]
+  );
+  return parseInt(row.cnt) >= EMAIL_RATE_LIMIT;
 }
 
-function recordEmailBooking(db, email, endpoint) {
-  db.prepare(
-    "INSERT INTO rate_limits (key, type, endpoint, timestamp) VALUES (?, 'email', ?, ?)"
-  ).run(email, endpoint, new Date().toISOString());
+async function recordEmailBooking(db, email, endpoint) {
+  await db.run(
+    "INSERT INTO rate_limits (key, type, endpoint, timestamp) VALUES ($1, 'email', $2, $3)",
+    [email, endpoint, new Date().toISOString()]
+  );
 }
 
 function getClientIp(request) {
@@ -218,7 +254,7 @@ function getClientIp(request) {
 function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
   app.get('/:slug', async (request, reply) => {
     const { slug } = request.params;
-    const profile = app.db.prepare("SELECT * FROM booking_profiles WHERE slug = ?").get(slug);
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE slug = $1", [slug]);
 
     if (!profile) {
       return reply.code(404).type('text/html').send(baseLayout('Not Found', '<h1>Page not found</h1>'));
@@ -226,106 +262,536 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
 
     if (!profile.is_active) {
       return reply.type('text/html').send(baseLayout(`Book - ${escapeHtml(profile.name)}`, `
-        <h1>${escapeHtml(profile.name)}</h1>
-        <p>Not currently accepting bookings</p>
+        <div style="text-align: center; padding: 4rem 0;">
+          <h1>${escapeHtml(profile.name)}</h1>
+          <article>
+            <p style="color: var(--text-secondary);">This booking profile is not currently accepting bookings.</p>
+          </article>
+        </div>
       `));
     }
 
+    const meetingTool = profile.meeting_tool === 'meet' ? 'Google Meet' : profile.meeting_tool === 'teams' ? 'Microsoft Teams' : 'Phone call';
+    const meetingIcon = profile.meeting_tool === 'meet' ? 'ph-video-camera' : profile.meeting_tool === 'teams' ? 'ph-video-camera' : 'ph-phone';
+
+    const adminRow = await app.db.getOne('SELECT time_format FROM admin WHERE id = $1', [profile.user_id]);
+    const bookingTimeFormat = (adminRow && adminRow.time_format) || '12h';
+
+    const availableDaysRows = await app.db.getAll("SELECT DISTINCT day_of_week FROM schedule_templates WHERE profile_id = $1", [profile.id]);
+    const availableDays = availableDaysRows.map(r => r.day_of_week);
+
     reply.type('text/html').send(baseLayout(`Book - ${escapeHtml(profile.name)}`, `
-      <h1>${escapeHtml(profile.name)}</h1>
-      <div id="booking-widget">
-        <section id="duration-step">
-          <h2>Select Duration</h2>
-          <div role="group">
-            <button class="duration-btn" data-duration="30">30 min</button>
-            <button class="duration-btn" data-duration="45">45 min</button>
-            <button class="duration-btn" data-duration="60">60 min</button>
+      <header class="booking-header">
+        <div class="booking-header-left">
+          <a href="/" class="booking-header-logo">
+            <span class="booking-header-powered">POWERED BY</span>
+            <img src="/img/icon.svg" alt="" class="booking-header-logo-icon">
+            <img src="/img/wordmark.svg" alt="Lumi" class="booking-header-logo-wordmark">
+          </a>
+        </div>
+        <div class="booking-header-center">
+          <div class="booking-steps" id="step-indicator">
+            <div class="booking-step active" data-step="1">
+              <div class="booking-step-dot"></div>
+              <span class="booking-step-label">Date</span>
+            </div>
+            <div class="booking-step-connector"></div>
+            <div class="booking-step" data-step="2">
+              <div class="booking-step-dot"></div>
+              <span class="booking-step-label">Time</span>
+            </div>
+            <div class="booking-step-connector"></div>
+            <div class="booking-step" data-step="3">
+              <div class="booking-step-dot"></div>
+              <span class="booking-step-label">Details</span>
+            </div>
           </div>
-        </section>
-        <section id="calendar-step" style="display:none">
-          <h2>Select a Date</h2>
-          <div id="calendar-grid"></div>
-        </section>
-        <section id="slots-step" style="display:none">
-          <h2>Available Times</h2>
-          <div id="time-slots"></div>
-        </section>
-        <section id="form-step" style="display:none">
-          <h2>Your Details</h2>
-          <div id="booking-error" style="display:none;color:var(--pico-color-red-500)"></div>
-          <form id="booking-form">
-            <label>Name (required) <input type="text" name="name" required></label>
-            <label>Email (required) <input type="email" name="email" required></label>
-            <label>Additional Attendees (comma-separated emails) <input type="text" name="additional_attendees"></label>
-            <label>Title <input type="text" name="title" placeholder="Meeting with [Your Name]"></label>
-            <label>Description <textarea name="description"></textarea></label>
-            <button type="submit">Confirm Booking</button>
-          </form>
-        </section>
-        <section id="confirmation-step" style="display:none">
-          <h2>Booking Confirmed</h2>
-          <div id="confirmation-details"></div>
-        </section>
+        </div>
+        <div class="booking-header-right">
+          <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+            <div class="theme-toggle-track">
+              <div class="theme-toggle-thumb">
+                <i class="ph-fill ph-sun theme-icon-sun"></i>
+                <i class="ph-fill ph-moon theme-icon-moon"></i>
+              </div>
+            </div>
+          </button>
+        </div>
+      </header>
+
+      <div class="booking-page-container">
+        <!-- Two Column Layout -->
+        <div class="booking-layout">
+          <!-- Left Panel -->
+          <div class="booking-left-panel">
+            <button type="button" class="booking-back-btn" id="back-btn" style="display:none;">
+              <i class="ph-bold ph-arrow-left"></i> Back
+            </button>
+
+            <div class="booking-profile-info">
+              <h1 class="booking-profile-title">${escapeHtml(profile.name)}</h1>
+
+              <div class="booking-profile-meta">
+                <div class="booking-profile-meta-item">
+                  <i class="ph-fill ph-clock"></i>
+                  <span id="duration-display">${(() => {
+                    let durations = [30, 45, 60];
+                    try { durations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+                    return durations[0] + ' min';
+                  })()}</span>
+                </div>
+                ${(() => {
+                    let durations = [30, 45, 60];
+                    try { durations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+                    if (durations.length <= 1) return '';
+                    return '<div class="duration-dropdown" id="duration-dropdown">' +
+                      '<button type="button" class="duration-dropdown-trigger" id="duration-trigger">' +
+                        '<span class="duration-dropdown-value">' + durations[0] + ' min</span>' +
+                        '<i class="ph-bold ph-caret-down duration-dropdown-chevron"></i>' +
+                      '</button>' +
+                      '<div class="duration-dropdown-menu" id="duration-menu">' +
+                        durations.map((d, i) => '<button type="button" class="duration-dropdown-option' + (i === 0 ? ' active' : '') + '" data-duration="' + d + '">' +
+                          '<span class="duration-dropdown-option-label">' + d + ' min</span>' +
+                          '<i class="ph-bold ph-check duration-dropdown-check"></i>' +
+                        '</button>').join('') +
+                      '</div>' +
+                    '</div>';
+                  })()}
+                <div class="booking-profile-meta-item">
+                  <i class="ph-fill ${meetingIcon}"></i>
+                  <span>${meetingTool}</span>
+                </div>
+              </div>
+
+              <div id="selected-info" class="booking-profile-selected" style="display:none;">
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Panel -->
+          <div class="booking-right-panel">
+            <!-- Calendar Step -->
+            <div id="calendar-step">
+              <div class="booking-content-header">
+                <h2 class="booking-content-title">Select a Date & Time</h2>
+              </div>
+
+              <div class="booking-calendar-container">
+                <div class="booking-calendar-section">
+                  <div id="calendar-header"></div>
+                  <div id="calendar-grid"></div>
+                  <div class="busyness-legend">
+                    <div class="busyness-legend-item"><div class="busyness-legend-dot dot-low"></div><span>Available</span></div>
+                    <div class="busyness-legend-item"><div class="busyness-legend-dot dot-medium"></div><span>Filling up</span></div>
+                    <div class="busyness-legend-item"><div class="busyness-legend-dot dot-high"></div><span>Almost full</span></div>
+                    <div class="busyness-legend-item"><div class="busyness-legend-dot dot-none"></div><span>Unavailable</span></div>
+                  </div>
+                  <div class="booking-timezone-picker" id="timezone-picker">
+                    <button type="button" class="booking-timezone-btn" id="timezone-btn">
+                      <i class="ph ph-globe"></i>
+                      <span id="timezone-label"></span>
+                      <i class="ph ph-caret-down timezone-caret"></i>
+                    </button>
+                    <div class="booking-timezone-dropdown" id="timezone-dropdown" style="display:none;">
+                      <div class="booking-timezone-search">
+                        <i class="ph ph-magnifying-glass"></i>
+                        <input type="text" id="timezone-search" placeholder="Search timezone..." autocomplete="off">
+                      </div>
+                      <div class="booking-timezone-list" id="timezone-list"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="booking-slots-section" id="slots-section" style="display:none;">
+                  <div class="booking-slots-header" id="selected-date-header"></div>
+                  <div class="booking-slots-list" id="time-slots"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Form Step -->
+            <div id="form-step" style="display:none;">
+              <div class="booking-content-header">
+                <h2 class="booking-content-title">Enter Details</h2>
+              </div>
+
+              <div id="booking-error" style="display:none"></div>
+
+              <form id="booking-form">
+                <div class="float-field">
+                  <input type="text" name="name" id="book-name" placeholder=" " required>
+                  <label for="book-name">Name *</label>
+                </div>
+                <div class="float-field">
+                  <input type="email" name="email" id="book-email" placeholder=" " required>
+                  <label for="book-email">Email *</label>
+                </div>
+                <div class="guests-section">
+                  <button type="button" id="add-guests-btn" class="add-guests-btn" onclick="toggleGuestsInput()">
+                    <i class="ph-bold ph-user-plus"></i> Add Guests
+                  </button>
+                  <div id="guests-input-area" class="guests-input-area">
+                    <div class="guests-tags" id="guests-tags"></div>
+                    <input type="text" id="guests-text-input" class="guests-text-input" placeholder="Enter email address">
+                    <input type="hidden" name="additional_attendees" id="additional_attendees_hidden">
+                  </div>
+                </div>
+                <div class="float-field">
+                  <input type="text" name="title" id="book-title" placeholder=" ">
+                  <label for="book-title">Meeting Title</label>
+                </div>
+                <div class="float-field">
+                  <textarea name="description" id="book-desc" placeholder=" " rows="4"></textarea>
+                  <label for="book-desc">Description (optional)</label>
+                </div>
+                <button type="submit" style="width: 100%; margin-top: 16px;">Schedule Event</button>
+              </form>
+            </div>
+
+            <!-- Confirmation Step -->
+            <div id="confirmation-step" style="display:none;">
+              <div style="text-align: center; padding: 48px 24px;">
+                <i class="ph-fill ph-check-circle" style="font-size: 4rem; color: var(--success); margin-bottom: 16px;"></i>
+                <h2 style="color: var(--success); margin-bottom: 24px;">Booking Confirmed!</h2>
+                <div id="confirmation-details"></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       <script>
         (function() {
           const slug = '${escapeHtml(slug)}';
-          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          let selectedDuration = null;
+          let tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const availableDays = ${JSON.stringify(availableDays)};
+          const BOOKING_TIME_FORMAT = '${bookingTimeFormat}';
+          var allowedDurations = ${(() => {
+            let durations = [30, 45, 60];
+            try { durations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+            return JSON.stringify(durations);
+          })()};
+          var selectedDuration = allowedDurations[0];
           let selectedSlotStart = null;
+          let selectedDateStr = null;
 
-          document.querySelectorAll('.duration-btn').forEach(function(btn) {
-            btn.addEventListener('click', function() {
-              selectedDuration = parseInt(btn.dataset.duration);
-              document.getElementById('calendar-step').style.display = '';
-              renderCalendar();
-            });
+          const TIMEZONE_LIST = (function() {
+            var list = ${JSON.stringify(TIMEZONES)};
+            if (list.indexOf(tz) === -1) list = [tz].concat(list);
+            return list;
+          })();
+          const tzLabel = document.getElementById('timezone-label');
+          const tzBtn = document.getElementById('timezone-btn');
+          const tzDropdown = document.getElementById('timezone-dropdown');
+          const tzSearch = document.getElementById('timezone-search');
+          const tzList = document.getElementById('timezone-list');
+
+          function formatTzDisplay(tzName) {
+            try {
+              const now = new Date();
+              const formatter = new Intl.DateTimeFormat('en-US', { timeZone: tzName, timeZoneName: 'shortOffset' });
+              const parts = formatter.formatToParts(now);
+              const offset = parts.find(p => p.type === 'timeZoneName');
+              return tzName.replace(/_/g, ' ').replace(/\\//g, ' / ') + (offset ? ' (' + offset.value + ')' : '');
+            } catch { return tzName; }
+          }
+
+          function renderTzList(filter) {
+            const q = (filter || '').toLowerCase();
+            const filtered = TIMEZONE_LIST.filter(function(t) { return t.toLowerCase().indexOf(q) !== -1; });
+            tzList.innerHTML = filtered.map(function(t) {
+              var active = t === tz ? ' active' : '';
+              return '<button type="button" class="booking-timezone-option' + active + '" data-tz="' + t + '">' + formatTzDisplay(t) + '</button>';
+            }).join('');
+          }
+
+          function setTimezone(newTz) {
+            tz = newTz;
+            tzLabel.textContent = formatTzDisplay(tz);
+            tzDropdown.style.display = 'none';
+            tzBtn.classList.remove('open');
+            busynessCache = {};
+            fetchBusyness(currentMonth.getFullYear(), currentMonth.getMonth());
+            if (selectedDateStr) loadSlots(selectedDateStr);
+          }
+
+          tzLabel.textContent = formatTzDisplay(tz);
+
+          tzBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var isOpen = tzDropdown.style.display !== 'none';
+            if (isOpen) { tzDropdown.style.display = 'none'; tzBtn.classList.remove('open'); }
+            else { tzDropdown.style.display = 'block'; tzBtn.classList.add('open'); tzSearch.value = ''; renderTzList(''); tzSearch.focus(); }
           });
 
-          function renderCalendar() {
-            var now = new Date();
-            var grid = document.getElementById('calendar-grid');
-            grid.innerHTML = '';
-            var horizon = new Date(now.getTime() + 4 * 7 * 24 * 60 * 60 * 1000);
-            var d = new Date(now);
-            d.setHours(0,0,0,0);
-            while (d < horizon) {
-              var dateStr = d.toISOString().split('T')[0];
-              var btn = document.createElement('button');
-              btn.textContent = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-              btn.className = 'outline';
-              (function(ds) {
-                btn.addEventListener('click', function() { loadSlots(ds); });
-              })(dateStr);
-              grid.appendChild(btn);
-              d.setDate(d.getDate() + 1);
+          tzSearch.addEventListener('input', function() { renderTzList(this.value); });
+          tzSearch.addEventListener('click', function(e) { e.stopPropagation(); });
+
+          tzList.addEventListener('click', function(e) {
+            var opt = e.target.closest('.booking-timezone-option');
+            if (opt) { setTimezone(opt.dataset.tz); }
+          });
+
+          document.addEventListener('click', function(e) {
+            if (!e.target.closest('#timezone-picker')) { tzDropdown.style.display = 'none'; tzBtn.classList.remove('open'); }
+          });
+
+          // Theme toggle
+          (function() {
+            var toggle = document.getElementById('theme-toggle');
+            var html = document.documentElement;
+            var isDark = html.getAttribute('data-theme') === 'dark';
+            if (isDark) toggle.classList.add('dark');
+
+            toggle.addEventListener('click', function() {
+              isDark = !isDark;
+              html.style.transition = 'all 0.35s';
+              if (isDark) {
+                html.setAttribute('data-theme', 'dark');
+                toggle.classList.add('dark');
+              } else {
+                html.removeAttribute('data-theme');
+                toggle.classList.remove('dark');
+              }
+              localStorage.setItem('booking-theme', isDark ? 'dark' : 'light');
+              setTimeout(function() { html.style.transition = ''; }, 500);
+            });
+          })();
+
+          function updateStepIndicator(activeStep) {
+            document.querySelectorAll('.booking-step').forEach(function(item) {
+              var step = parseInt(item.dataset.step);
+              item.classList.remove('active', 'completed');
+              if (step === activeStep) item.classList.add('active');
+              else if (step < activeStep) item.classList.add('completed');
+            });
+            document.querySelectorAll('.booking-step-connector').forEach(function(line, idx) {
+              line.classList.toggle('completed', idx < activeStep - 1);
+            });
+          }
+
+          function showBackButton() { document.getElementById('back-btn').style.display = 'inline-flex'; }
+          function hideBackButton() { document.getElementById('back-btn').style.display = 'none'; }
+
+          // Duration dropdown
+          (function() {
+            var dropdown = document.getElementById('duration-dropdown');
+            if (!dropdown) return;
+            var trigger = document.getElementById('duration-trigger');
+            var menu = document.getElementById('duration-menu');
+            var options = menu.querySelectorAll('.duration-dropdown-option');
+            var isOpen = false;
+
+            function openMenu() {
+              isOpen = true;
+              dropdown.classList.add('open');
+              trigger.setAttribute('aria-expanded', 'true');
+            }
+
+            function closeMenu() {
+              isOpen = false;
+              dropdown.classList.remove('open');
+              trigger.setAttribute('aria-expanded', 'false');
+            }
+
+            trigger.addEventListener('click', function(e) {
+              e.stopPropagation();
+              if (isOpen) { closeMenu(); } else { openMenu(); }
+            });
+
+            document.addEventListener('click', function(e) {
+              if (isOpen && !dropdown.contains(e.target)) closeMenu();
+            });
+
+            options.forEach(function(opt) {
+              opt.addEventListener('click', function() {
+                options.forEach(function(o) { o.classList.remove('active'); });
+                opt.classList.add('active');
+                var val = parseInt(opt.dataset.duration);
+                selectedDuration = val;
+                var label = val + ' min';
+                document.getElementById('duration-display').textContent = label;
+                trigger.querySelector('.duration-dropdown-value').textContent = label;
+                closeMenu();
+                busynessCache = {};
+                fetchBusyness(currentMonth.getFullYear(), currentMonth.getMonth());
+                if (selectedDateStr) loadSlots(selectedDateStr);
+              });
+            });
+          })();
+
+          var slotsAbortController = null;
+
+          function loadSlots(dateStr) {
+            if (slotsAbortController) slotsAbortController.abort();
+            slotsAbortController = new AbortController();
+            var signal = slotsAbortController.signal;
+            var container = document.getElementById('time-slots');
+            container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-spinner booking-slots-empty-icon loading" style="opacity: 1;"></i><div class="booking-slots-empty-description">Loading available times...</div></div>';
+            document.getElementById('slots-section').style.display = 'block';
+
+            fetch('/api/book/' + slug + '/slots?date=' + dateStr + '&duration=' + selectedDuration + '&timezone=' + tz, { signal: signal })
+              .then(function(res) { if (!res.ok) throw new Error(res.status); return res.json(); })
+              .then(function(data) {
+                if (signal.aborted) return;
+                if (!data.slots || !data.slots.length) {
+                  container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-calendar-x booking-slots-empty-icon"></i><div class="booking-slots-empty-title">No Available Times</div><div class="booking-slots-empty-description">Please select another date to see available time slots.</div></div>';
+                  return;
+                }
+                var renderedSlots = data.slots.map(function(s) {
+                  var t = new Date(s.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: BOOKING_TIME_FORMAT !== '24h', timeZone: tz });
+                  return '<button class="booking-slot-btn" data-start="' + s.start + '" data-time="' + t + '">' + t + '</button>';
+                });
+                container.innerHTML = renderedSlots.join('');
+                container.querySelectorAll('.booking-slot-btn').forEach(function(slotBtn) {
+                  slotBtn.addEventListener('click', function() {
+                    selectedSlotStart = slotBtn.dataset.start;
+                    var d2 = new Date(selectedDateStr + 'T00:00:00Z');
+                    var dateDisplay2 = d2.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+                    updateSelectedInfo(dateDisplay2, slotBtn.dataset.time);
+                    document.getElementById('calendar-step').style.display = 'none';
+                    document.getElementById('form-step').style.display = 'block';
+                    document.getElementById('booking-error').style.display = 'none';
+                    updateStepIndicator(3);
+                    var dt = document.getElementById('duration-dropdown');
+                    if (dt) dt.style.display = 'none';
+                  });
+                });
+              })
+              .catch(function(err) {
+                if (err && err.name === 'AbortError') return;
+                container.innerHTML = '<div class="booking-slots-empty"><i class="ph-bold ph-wifi-x booking-slots-empty-icon" style="color: #dc2626;"></i><div class="booking-slots-empty-title" style="color: #dc2626;">Connection Error</div><div class="booking-slots-empty-description">Failed to load times. Please try again.</div></div>';
+              });
+          }
+
+          function updateSelectedInfo(dateStr, timeStr) {
+            const selectedInfo = document.getElementById('selected-info');
+            if (dateStr && timeStr) {
+              selectedInfo.innerHTML = '<div class="booking-profile-selected-item"><i class="ph-fill ph-calendar"></i><span>' + dateStr + '</span></div><div class="booking-profile-selected-item"><i class="ph-fill ph-clock"></i><span>' + timeStr + '</span></div>';
+              selectedInfo.style.display = 'block';
+            } else if (dateStr) {
+              selectedInfo.innerHTML = '<div class="booking-profile-selected-item"><i class="ph-fill ph-calendar"></i><span>' + dateStr + '</span></div>';
+              selectedInfo.style.display = 'block';
+            } else {
+              selectedInfo.style.display = 'none';
             }
           }
 
-          function loadSlots(dateStr) {
-            document.getElementById('slots-step').style.display = '';
-            document.getElementById('form-step').style.display = 'none';
-            var container = document.getElementById('time-slots');
-            container.innerHTML = '<p>Loading...</p>';
-            fetch('/api/book/' + slug + '/slots?date=' + dateStr + '&duration=' + selectedDuration + '&timezone=' + tz)
-              .then(function(res) { return res.json(); })
-              .then(function(data) {
-                if (!data.slots.length) {
-                  container.innerHTML = '<p>No available times for this date.</p>';
-                  return;
-                }
-                container.innerHTML = data.slots.map(function(s) {
-                  var t = new Date(s.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: tz });
-                  return '<button class="slot-btn outline" data-start="' + s.start + '">' + t + '</button>';
-                }).join('');
-                container.querySelectorAll('.slot-btn').forEach(function(btn) {
-                  btn.addEventListener('click', function() {
-                    selectedSlotStart = btn.dataset.start;
-                    document.getElementById('form-step').style.display = '';
-                    document.getElementById('booking-error').style.display = 'none';
-                  });
-                });
-              });
+          document.getElementById('back-btn').addEventListener('click', function() {
+            const formVisible = document.getElementById('form-step').style.display !== 'none';
+            const slotsVisible = document.getElementById('slots-section').style.display !== 'none';
+            if (formVisible) {
+              document.getElementById('form-step').style.display = 'none';
+              document.getElementById('calendar-step').style.display = 'block';
+              document.getElementById('slots-section').style.display = 'block';
+              updateStepIndicator(2);
+              updateSelectedInfo(selectedDateStr, null);
+              var dt = document.getElementById('duration-dropdown');
+              if (dt) dt.style.display = '';
+            } else if (slotsVisible) {
+              document.getElementById('slots-section').style.display = 'none';
+              hideBackButton();
+              updateStepIndicator(1);
+              updateSelectedInfo(null, null);
+            }
+          });
+
+          function formatDateToYYYYMMDD(date) {
+            var year = date.getFullYear();
+            var month = String(date.getMonth() + 1).padStart(2, '0');
+            var day = String(date.getDate()).padStart(2, '0');
+            return year + '-' + month + '-' + day;
+          }
+
+          var currentMonth = new Date();
+          currentMonth.setHours(0,0,0,0);
+          currentMonth.setDate(1);
+          var today = new Date();
+          today.setHours(0,0,0,0);
+          var busynessCache = {};
+
+          function fetchBusyness(year, month) {
+            var key = year + '-' + String(month + 1).padStart(2, '0');
+            if (busynessCache[key]) { applyBusyness(busynessCache[key]); return; }
+            fetch('/api/book/' + slug + '/busyness?month=' + key + '&duration=' + selectedDuration)
+              .then(function(res) { if (!res.ok) throw new Error(res.status); return res.json(); })
+              .then(function(data) { if (data.busyness) { busynessCache[key] = data.busyness; applyBusyness(data.busyness); } })
+              .catch(function() {});
+          }
+
+          function applyBusyness(busynessData) {
+            document.querySelectorAll('.calendar-day').forEach(function(btn) {
+              if (btn.disabled) return;
+              btn.classList.remove('busyness-low', 'busyness-medium', 'busyness-high', 'busyness-full');
+              var dayNum = parseInt(btn.textContent.trim());
+              var dateStr = formatDateToYYYYMMDD(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), dayNum));
+              var level = busynessData[dateStr];
+              if (level === 'full') {
+                var isToday = btn.classList.contains('calendar-day-today');
+                btn.classList.add('calendar-day-disabled');
+                btn.disabled = true;
+                if (isToday) btn.classList.add('calendar-day-today');
+              } else if (level && level !== 'none') {
+                btn.classList.add('busyness-' + level);
+              }
+            });
+          }
+
+          updateStepIndicator(1);
+          renderCalendar();
+
+          function renderCalendar() {
+            var grid = document.getElementById('calendar-grid');
+            var header = document.getElementById('calendar-header');
+            var monthYear = currentMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+            header.innerHTML = '<button id="prev-month" class="outline calendar-nav">&larr;</button><span class="calendar-month-title">' + monthYear + '</span><button id="next-month" class="outline calendar-nav">&rarr;</button>';
+            document.getElementById('prev-month').addEventListener('click', function() { currentMonth.setMonth(currentMonth.getMonth() - 1); renderCalendar(); });
+            document.getElementById('next-month').addEventListener('click', function() { currentMonth.setMonth(currentMonth.getMonth() + 1); renderCalendar(); });
+            grid.innerHTML = '';
+            var dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            dayNames.forEach(function(name) { var dayHeader = document.createElement('div'); dayHeader.className = 'calendar-day-header'; dayHeader.textContent = name; grid.appendChild(dayHeader); });
+            var firstDay = new Date(currentMonth);
+            var lastDay = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
+            var startDay = firstDay.getDay();
+            for (var i = 0; i < startDay; i++) { var emptyCell = document.createElement('div'); emptyCell.className = 'calendar-day-empty'; grid.appendChild(emptyCell); }
+            var horizon = new Date(); horizon.setHours(0,0,0,0); horizon.setDate(horizon.getDate() + 90);
+            for (var day = 1; day <= lastDay.getDate(); day++) {
+              var d = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+              var dateStr = formatDateToYYYYMMDD(d);
+              var btn = document.createElement('button');
+              btn.textContent = day;
+              btn.className = 'calendar-day';
+              var isPast = d < today;
+              var isFuture = d > horizon;
+              var isToday = d.getTime() === today.getTime();
+              var dayOfWeek = d.getDay();
+              var isUnavailable = availableDays.length > 0 && availableDays.indexOf(dayOfWeek) === -1;
+              if (isToday) btn.classList.add('calendar-day-today');
+              if (isPast || isFuture || isUnavailable) { btn.classList.add('calendar-day-disabled'); btn.disabled = true; }
+              else { (function(ds) { btn.addEventListener('click', function() { selectDate(ds); }); })(dateStr); }
+              grid.appendChild(btn);
+            }
+            fetchBusyness(currentMonth.getFullYear(), currentMonth.getMonth());
+          }
+
+          function selectDate(dateStr) {
+            selectedDateStr = dateStr;
+            document.querySelectorAll('.calendar-day').forEach(function(btn) { btn.classList.remove('calendar-day-selected'); });
+            var targetDate = new Date(dateStr + 'T00:00:00Z');
+            var targetDay = targetDate.getUTCDate();
+            var targetMonth = targetDate.getUTCMonth();
+            var targetYear = targetDate.getUTCFullYear();
+            document.querySelectorAll('.calendar-day').forEach(function(btn) {
+              if (btn.disabled) return;
+              var btnDay = parseInt(btn.textContent.trim());
+              if (btnDay === targetDay && currentMonth.getMonth() === targetMonth && currentMonth.getFullYear() === targetYear) btn.classList.add('calendar-day-selected');
+            });
+            showBackButton();
+            updateStepIndicator(2);
+            var d = new Date(dateStr + 'T00:00:00Z');
+            var dateDisplay = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+            document.getElementById('selected-date-header').textContent = dateDisplay;
+            updateSelectedInfo(dateDisplay, null);
+            loadSlots(dateStr);
           }
 
           function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -334,168 +800,217 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
             e.preventDefault();
             var form = e.target;
             var errDiv = document.getElementById('booking-error');
+            var submitBtn = form.querySelector('button[type="submit"]');
             errDiv.style.display = 'none';
-
-            var attendeesRaw = form.additional_attendees.value.trim();
+            submitBtn.textContent = 'Creating booking...';
+            submitBtn.disabled = true;
+            var attendeesRaw = document.getElementById('additional_attendees_hidden').value.trim();
             var additionalAttendees = attendeesRaw ? attendeesRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
-
-            var payload = {
-              name: form.name.value.trim(),
-              email: form.email.value.trim(),
-              additional_attendees: additionalAttendees,
-              title: form.title.value.trim() || undefined,
-              description: form.description.value.trim() || undefined,
-              start_time: selectedSlotStart,
-              duration: selectedDuration,
-              timezone: tz
-            };
-
-            fetch('/api/book/' + slug, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            })
+            var payload = { name: form.name.value.trim(), email: form.email.value.trim(), additional_attendees: additionalAttendees, title: form.title.value.trim() || undefined, description: form.description.value.trim() || undefined, start_time: selectedSlotStart, duration: selectedDuration, timezone: tz };
+            fetch('/api/book/' + slug, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
             .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
             .then(function(result) {
-              if (!result.ok) {
-                errDiv.textContent = result.data.error || 'Something went wrong';
-                errDiv.style.display = '';
-                return;
-              }
+              if (!result.ok) { errDiv.textContent = result.data.error || 'Something went wrong.'; errDiv.className = 'alert error'; errDiv.style.display = 'block'; submitBtn.textContent = 'Schedule Event'; submitBtn.disabled = false; errDiv.scrollIntoView({ behavior: 'smooth' }); return; }
               var b = result.data.booking;
-              document.getElementById('booking-widget').querySelectorAll('section').forEach(function(s) { s.style.display = 'none'; });
-              var conf = document.getElementById('confirmation-step');
-              conf.style.display = '';
-              var startLocal = new Date(b.start_time).toLocaleString(undefined, { timeZone: tz, dateStyle: 'full', timeStyle: 'short' });
-              var endLocal = new Date(b.end_time).toLocaleTimeString(undefined, { timeZone: tz, hour: '2-digit', minute: '2-digit' });
-              var details = '<p><strong>' + esc(b.title) + '</strong></p>';
-              details += '<p>' + esc(startLocal) + ' - ' + esc(endLocal) + ' (' + b.duration_minutes + ' min)</p>';
-              if (b.meeting_link) details += '<p>Meeting link: <a href="' + esc(b.meeting_link) + '">' + esc(b.meeting_link) + '</a></p>';
-              details += '<p>Attendees: ' + b.attendees.map(esc).join(', ') + '</p>';
+              document.getElementById('form-step').style.display = 'none';
+              document.getElementById('confirmation-step').style.display = 'block';
+              hideBackButton();
+              var stepIndicator = document.getElementById('step-indicator');
+              if (stepIndicator) stepIndicator.style.display = 'none';
+              var startLocal = new Date(b.start_time).toLocaleString(undefined, { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: BOOKING_TIME_FORMAT !== '24h' });
+              var details = '<div style="background: var(--neutral-20); border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: left;">';
+              details += '<h3 style="margin-top: 0; font-size: 1.125rem; color: var(--text-primary);">' + esc(b.title) + '</h3>';
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-calendar" style="font-size: 1.25rem; color: var(--text-secondary);"></i><span style="color: var(--text-primary);">' + esc(startLocal) + '</span></div>';
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-clock" style="font-size: 1.25rem; color: var(--text-secondary);"></i><span style="color: var(--text-primary);">' + b.duration_minutes + ' minutes</span></div>';
+              if (b.meeting_link) { details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-video-camera" style="font-size: 1.25rem; color: var(--text-secondary);"></i><a href="' + esc(b.meeting_link) + '" target="_blank" style="color: var(--primary); font-weight: 500;">Join meeting</a></div>'; }
+              details += '<div style="display: flex; align-items: center; gap: 12px; margin: 12px 0;"><i class="ph-fill ph-users" style="font-size: 1.25rem; color: var(--text-secondary);"></i><span style="color: var(--text-primary);">' + b.attendees.map(esc).join(', ') + '</span></div>';
+              details += '</div>';
+              details += '<p style="color: var(--text-secondary); font-size: 0.9375rem; text-align: center;">A calendar invitation has been sent to all attendees.</p>';
               document.getElementById('confirmation-details').innerHTML = details;
-            });
+            })
+            .catch(function() { errDiv.textContent = 'Network error. Please check your connection.'; errDiv.className = 'alert error'; errDiv.style.display = ''; submitBtn.textContent = 'Schedule Event'; submitBtn.disabled = false; });
           });
         })();
+
+        function toggleGuestsInput() {
+          document.getElementById('add-guests-btn').style.display = 'none';
+          document.getElementById('guests-input-area').classList.add('open');
+          document.getElementById('guests-text-input').focus();
+        }
+
+        (function() {
+          var guests = [];
+          var input = document.getElementById('guests-text-input');
+          var tagsContainer = document.getElementById('guests-tags');
+          var hiddenInput = document.getElementById('additional_attendees_hidden');
+          function isValidEmail(email) { return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email); }
+          function renderTags() { tagsContainer.innerHTML = guests.map(function(email, i) { return '<span class="guest-tag">' + email + '<button type="button" onclick="removeGuest(' + i + ')">\\u00d7</button></span>'; }).join(''); hiddenInput.value = guests.join(','); }
+          function addGuest(email) { email = email.trim(); if (email && isValidEmail(email) && guests.indexOf(email) === -1) { guests.push(email); renderTags(); } }
+          window.removeGuest = function(idx) { guests.splice(idx, 1); renderTags(); };
+          input.addEventListener('keydown', function(e) { if (e.key === ' ' || e.key === 'Enter' || e.key === ',') { e.preventDefault(); addGuest(input.value); input.value = ''; } if (e.key === 'Backspace' && !input.value && guests.length > 0) { guests.pop(); renderTags(); } });
+          input.addEventListener('blur', function() { if (input.value.trim()) { addGuest(input.value); input.value = ''; } });
+        })();
       </script>
-    `));
+    `, false, '', true));
   });
 }
 
 function registerRateLimitHook(app) {
   app.addHook('onRequest', async (request, reply) => {
-    cleanupOldRateLimits(app.db);
+    if (request.method !== 'POST') return;
+    await optimizedCleanupOldRateLimits(app.db);
     const ip = getClientIp(request);
-    if (checkIpRateLimit(app.db, ip)) {
+    if (await checkIpRateLimit(app.db, ip)) {
       return reply.code(429).send({ error: 'Too many requests, please try again later' });
     }
-    recordIpRequest(app.db, ip, request.url);
+    await recordIpRequest(app.db, ip, request.url);
+  });
+}
+
+function registerBusynessApi(app, { encryptionKey }) {
+  app.get('/:slug/busyness', async (request, reply) => {
+    const { slug } = request.params;
+    const { month, duration } = request.query;
+
+    if (!month) return reply.code(400).send({ error: 'month is required (YYYY-MM)' });
+
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE slug = $1", [slug]);
+    if (!profile) return reply.code(404).send({ error: 'profile not found' });
+
+    let profileDurations = VALID_DURATIONS;
+    try { profileDurations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+
+    const durationMinutes = parseInt(duration, 10) || profileDurations[0];
+    if (!profileDurations.includes(durationMinutes)) return reply.code(400).send({ error: 'invalid duration for this profile' });
+
+    const [year, mon] = month.split('-').map(Number);
+    const daysInMonth = new Date(year, mon, 0).getDate();
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const horizonDate = new Date(now.getTime() + HORIZON_MS);
+    const bufferMs = (profile.buffer_time_minutes || 0) * 60 * 1000;
+
+    const activeDates = [];
+    const result = {};
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const dateObj = new Date(dateStr + 'T00:00:00Z');
+      if (dateObj < new Date(todayStr + 'T00:00:00Z') || dateObj > horizonDate) continue;
+
+      const totalSlots = await computeSlots(app.db, profile.id, dateStr, durationMinutes, now);
+      if (totalSlots.length === 0) { result[dateStr] = 'none'; continue; }
+
+      const existingBookings = await getExistingBookings(app.db, profile.id, dateStr);
+      let available = totalSlots;
+      if (existingBookings.length > 0) available = removeConflicts(available, existingBookings, bufferMs);
+
+      activeDates.push({ dateStr, totalSlots, available });
+    }
+
+    const readCalendars = await app.db.getAll(
+      "SELECT cc.* FROM profile_read_calendars prc JOIN calendar_connections cc ON prc.calendar_connection_id = cc.id WHERE prc.profile_id = $1 AND cc.status = 'connected'",
+      [profile.id]
+    );
+
+    let calendarBusyByDate = {};
+    if (readCalendars.length > 0 && activeDates.length > 0) {
+      const firstDate = activeDates[0].dateStr;
+      const lastDate = activeDates[activeDates.length - 1].dateStr;
+      const rangeMin = firstDate + 'T00:00:00Z';
+      const rangeMax = lastDate + 'T23:59:59Z';
+
+      const allBusy = [];
+      const calResults = await Promise.allSettled(readCalendars.map(async (cal) => {
+        const accessToken = await getValidTokenForConnection(app.db, encryptionKey, cal);
+        if (cal.provider === 'google') {
+          const response = await fetchWithTimeout(app.fetchFn, 'https://www.googleapis.com/calendar/v3/freeBusy', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ timeMin: rangeMin, timeMax: rangeMax, items: [{ id: 'primary' }] }) });
+          if (response.ok) { const data = await response.json(); return data.calendars?.primary?.busy || []; }
+        } else if (cal.provider === 'microsoft') {
+          const response = await fetchWithTimeout(app.fetchFn, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ schedules: [cal.email], startTime: { dateTime: rangeMin, timeZone: 'UTC' }, endTime: { dateTime: rangeMax, timeZone: 'UTC' } }) });
+          if (response.ok) { const data = await response.json(); return (data.value?.[0]?.scheduleItems || []).map(item => ({ start: item.start.dateTime, end: item.end.dateTime })); }
+        } else if (cal.provider === 'zoho') {
+          const params = new URLSearchParams({ stime: rangeMin, etime: rangeMax });
+          const response = await fetchWithTimeout(app.fetchFn, `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+          if (response.ok) { const data = await response.json(); return (data.fb_data || []).filter(s => s.fbtype === 'busy').map(s => ({ start: s.s_datetime, end: s.e_datetime })); }
+        }
+        return [];
+      }));
+
+      for (const r of calResults) { if (r.status === 'fulfilled' && r.value) allBusy.push(...r.value); }
+      for (const busy of allBusy) { const busyDate = busy.start.split('T')[0]; if (!calendarBusyByDate[busyDate]) calendarBusyByDate[busyDate] = []; calendarBusyByDate[busyDate].push(busy); }
+    }
+
+    for (const { dateStr, totalSlots, available } of activeDates) {
+      let finalAvailable = available;
+      const dayBusy = calendarBusyByDate[dateStr];
+      if (dayBusy && dayBusy.length > 0) finalAvailable = removeConflicts(finalAvailable, dayBusy, bufferMs);
+      const ratio = finalAvailable.length / totalSlots.length;
+      if (ratio === 0) result[dateStr] = 'full';
+      else if (ratio <= 0.3) result[dateStr] = 'high';
+      else if (ratio <= 0.6) result[dateStr] = 'medium';
+      else result[dateStr] = 'low';
+    }
+
+    return { busyness: result };
   });
 }
 
 function registerSlotsApi(app, { encryptionKey }) {
   app.get('/:slug/slots', async (request, reply) => {
     const { slug } = request.params;
-    const { date, duration, timezone } = request.query;
+    const { date, duration } = request.query;
+    if (!date || !duration) return reply.code(400).send({ error: 'date and duration are required' });
 
-    if (!date || !duration) {
-      return reply.code(400).send({ error: 'date and duration are required' });
-    }
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE slug = $1", [slug]);
+    if (!profile) return reply.code(404).send({ error: 'profile not found' });
+
+    let profileDurations = VALID_DURATIONS;
+    try { profileDurations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
 
     const durationMinutes = parseInt(duration, 10);
-    if (!VALID_DURATIONS.includes(durationMinutes)) {
-      return reply.code(400).send({ error: 'duration must be 30, 45, or 60' });
-    }
-
-    const profile = app.db.prepare("SELECT * FROM booking_profiles WHERE slug = ?").get(slug);
-    if (!profile) {
-      return reply.code(404).send({ error: 'profile not found' });
-    }
+    if (!profileDurations.includes(durationMinutes)) return reply.code(400).send({ error: 'invalid duration for this profile' });
 
     const now = new Date();
-    let slots = computeSlots(app.db, profile.id, date, durationMinutes, now);
+    let slots = await computeSlots(app.db, profile.id, date, durationMinutes, now);
 
-    const existingBookings = getExistingBookings(app.db, profile.id, date);
-    if (existingBookings.length > 0) {
-      slots = removeConflicts(slots, existingBookings);
-    }
+    const bufferMs = (profile.buffer_time_minutes || 0) * 60 * 1000;
+    const existingBookings = await getExistingBookings(app.db, profile.id, date);
+    if (existingBookings.length > 0) slots = removeConflicts(slots, existingBookings, bufferMs);
 
-    const busySlots = await getCalendarBusySlots(app.db, encryptionKey, profile.id, date, app.fetchFn);
-    if (busySlots.length > 0) {
-      slots = removeConflicts(slots, busySlots);
-    }
+    try {
+      const busySlots = await getCalendarBusySlots(app.db, encryptionKey, profile.id, date, app.fetchFn);
+      if (busySlots.length > 0) slots = removeConflicts(slots, busySlots, bufferMs);
+    } catch { }
 
     return { slots };
   });
 }
 
 async function createCalendarEvent(fetchFn, db, encryptionKey, connection, eventData) {
-  let accessToken;
-  try {
-    accessToken = decrypt(connection.encrypted_access_token, encryptionKey);
-  } catch {
-    accessToken = connection.encrypted_access_token;
-  }
+  const accessToken = await getValidTokenForConnection(db, encryptionKey, connection);
 
   if (connection.provider === 'google') {
-    const event = {
-      summary: eventData.title,
-      description: eventData.description || '',
-      start: { dateTime: eventData.start },
-      end: { dateTime: eventData.end },
-      attendees: eventData.attendees.map(email => ({ email })),
-    };
-    const response = await fetchFn('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(event),
-    });
-    if (!response.ok) throw new Error('Google event creation failed');
+    const event = { summary: eventData.title, description: eventData.description || '', start: { dateTime: eventData.start }, end: { dateTime: eventData.end }, attendees: eventData.attendees.map(email => ({ email })) };
+    const response = await fetchFn('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(event) });
+    if (!response.ok) { const errText = await response.text(); throw new Error(`Google event creation failed: ${errText}`); }
     const data = await response.json();
     return data.id;
   } else if (connection.provider === 'microsoft') {
-    const body = {
-      subject: eventData.title,
-      start: { dateTime: eventData.start, timeZone: 'UTC' },
-      end: { dateTime: eventData.end, timeZone: 'UTC' },
-      attendees: eventData.attendees.map(email => ({ emailAddress: { address: email }, type: 'required' })),
-      body: { contentType: 'Text', content: eventData.description || '' },
-    };
-    const response = await fetchFn('https://graph.microsoft.com/v1.0/me/events', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const body = { subject: eventData.title, start: { dateTime: eventData.start, timeZone: 'UTC' }, end: { dateTime: eventData.end, timeZone: 'UTC' }, attendees: eventData.attendees.map(email => ({ emailAddress: { address: email }, type: 'required' })), body: { contentType: 'Text', content: eventData.description || '' } };
+    const response = await fetchFn('https://graph.microsoft.com/v1.0/me/events', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error('Microsoft event creation failed');
     const data = await response.json();
     return data.id;
   } else if (connection.provider === 'zoho') {
-    const calendarsResponse = await fetchFn('https://calendar.zoho.com/api/v1/calendars', {
-      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-    });
+    const calendarsResponse = await fetchFn('https://calendar.zoho.com/api/v1/calendars', { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
     const calendarsData = await calendarsResponse.json();
     const primaryCalendar = calendarsData.calendars.find(c => c.isprimary) || calendarsData.calendars[0];
     const calendarUid = primaryCalendar.uid;
-
     const pad = n => String(n).padStart(2, '0');
-    const formatZoho = (isoStr) => {
-      const d = new Date(isoStr);
-      return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}+0000`;
-    };
-
-    const zohoBody = {
-      eventdata: {
-        title: eventData.title,
-        description: eventData.description || '',
-        start: formatZoho(eventData.start),
-        end: formatZoho(eventData.end),
-        attendees: eventData.attendees.map(email => ({ email })),
-      },
-    };
-    const response = await fetchFn(`https://calendar.zoho.com/api/v1/calendars/${calendarUid}/events`, {
-      method: 'POST',
-      headers: { Authorization: `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(zohoBody),
-    });
+    const formatZoho = (isoStr) => { const d = new Date(isoStr); return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}+0000`; };
+    const zohoBody = { eventdata: { title: eventData.title, description: eventData.description || '', start: formatZoho(eventData.start), end: formatZoho(eventData.end), attendees: eventData.attendees.map(email => ({ email })) } };
+    const response = await fetchFn(`https://calendar.zoho.com/api/v1/calendars/${calendarUid}/events`, { method: 'POST', headers: { Authorization: `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(zohoBody) });
     if (!response.ok) throw new Error('Zoho event creation failed');
     const result = await response.json();
     return result.events[0].uid;
@@ -508,137 +1023,97 @@ function registerBookingSubmitApi(app, { encryptionKey }) {
   app.post('/:slug', async (request, reply) => {
     const { slug } = request.params;
     const body = request.body || {};
-
     const { name, email, additional_attendees, title, description, start_time, duration, timezone } = body;
 
-    if (!name || !name.trim()) {
-      return reply.code(400).send({ error: 'name is required' });
-    }
-    if (!email || !email.trim()) {
-      return reply.code(400).send({ error: 'email is required' });
-    }
-    if (!EMAIL_REGEX.test(email)) {
-      return reply.code(400).send({ error: 'invalid email format' });
-    }
+    if (!name || !name.trim()) return reply.code(400).send({ error: 'name is required' });
+    if (!email || !email.trim()) return reply.code(400).send({ error: 'email is required' });
+    if (!EMAIL_REGEX.test(email)) return reply.code(400).send({ error: 'invalid email format' });
 
     if (additional_attendees && Array.isArray(additional_attendees)) {
       for (const attendeeEmail of additional_attendees) {
-        if (attendeeEmail && !EMAIL_REGEX.test(attendeeEmail)) {
-          return reply.code(400).send({ error: 'invalid additional attendee email format' });
-        }
+        if (attendeeEmail && !EMAIL_REGEX.test(attendeeEmail)) return reply.code(400).send({ error: 'invalid additional attendee email format' });
       }
     }
 
     const durationMinutes = parseInt(duration, 10);
-    if (!VALID_DURATIONS.includes(durationMinutes)) {
-      return reply.code(400).send({ error: 'duration must be 30, 45, or 60' });
-    }
+    if (!start_time) return reply.code(400).send({ error: 'start_time is required' });
 
-    if (!start_time) {
-      return reply.code(400).send({ error: 'start_time is required' });
-    }
+    const profile = await app.db.getOne("SELECT * FROM booking_profiles WHERE slug = $1", [slug]);
+    if (!profile) return reply.code(404).send({ error: 'profile not found' });
+    if (!profile.is_active) return reply.code(400).send({ error: 'This profile is not currently accepting bookings' });
 
-    const profile = app.db.prepare("SELECT * FROM booking_profiles WHERE slug = ?").get(slug);
-    if (!profile) {
-      return reply.code(404).send({ error: 'profile not found' });
-    }
+    let profileDurations = VALID_DURATIONS;
+    try { profileDurations = JSON.parse(profile.allowed_durations || '[30,45,60]'); } catch(e) {}
+    if (!profileDurations.includes(durationMinutes)) return reply.code(400).send({ error: 'invalid duration for this profile' });
 
-    if (!profile.is_active) {
-      return reply.code(400).send({ error: 'This profile is not currently accepting bookings' });
-    }
-
-    if (checkEmailRateLimit(app.db, email.trim())) {
-      return reply.code(429).send({ error: 'Too many bookings, please try again later' });
-    }
+    if (await checkEmailRateLimit(app.db, email.trim())) return reply.code(429).send({ error: 'Too many bookings, please try again later' });
 
     const startDate = new Date(start_time);
     const endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
     const dateStr = start_time.split('T')[0];
 
-    // Re-validate availability
     const now = new Date();
-    let slots = computeSlots(app.db, profile.id, dateStr, durationMinutes, now);
-
-    const existingBookings = getExistingBookings(app.db, profile.id, dateStr);
-    if (existingBookings.length > 0) {
-      slots = removeConflicts(slots, existingBookings);
-    }
+    let slots = await computeSlots(app.db, profile.id, dateStr, durationMinutes, now);
+    const bufferMs = (profile.buffer_time_minutes || 0) * 60 * 1000;
+    const existingBookings = await getExistingBookings(app.db, profile.id, dateStr);
+    if (existingBookings.length > 0) slots = removeConflicts(slots, existingBookings, bufferMs);
 
     const busySlots = await getCalendarBusySlots(app.db, encryptionKey, profile.id, dateStr, app.fetchFn);
-    if (busySlots.length > 0) {
-      slots = removeConflicts(slots, busySlots);
-    }
+    if (busySlots.length > 0) slots = removeConflicts(slots, busySlots, bufferMs);
 
     const slotAvailable = slots.some(s => s.start === startDate.toISOString());
-    if (!slotAvailable) {
-      return reply.code(409).send({ error: 'This slot is no longer available, please pick another' });
-    }
+    if (!slotAvailable) return reply.code(409).send({ error: 'This slot is no longer available, please pick another' });
 
-    // Gather attendees
-    const defaultAttendees = app.db.prepare("SELECT email FROM default_attendees WHERE profile_id = ?").all(profile.id).map(a => a.email);
+    const defaultAttendeesRows = await app.db.getAll("SELECT email FROM default_attendees WHERE profile_id = $1", [profile.id]);
+    const defaultAttendees = defaultAttendeesRows.map(a => a.email);
     const allAttendees = [...new Set([email, ...defaultAttendees, ...(additional_attendees || [])])];
 
     const bookingTitle = title && title.trim() ? title.trim() : `Meeting with ${name.trim()}`;
     const bookingDescription = description || '';
     const cancellationToken = crypto.randomUUID();
 
-    // Build event description with cancellation link and meeting link
     let eventDescription = bookingDescription;
-    if (profile.meeting_link_url) {
-      eventDescription += (eventDescription ? '\n\n' : '') + `Meeting link: ${profile.meeting_link_url}`;
-    }
+    if (profile.meeting_link_url) eventDescription += (eventDescription ? '\n\n' : '') + `Meeting link: ${profile.meeting_link_url}`;
     eventDescription += (eventDescription ? '\n\n' : '') + `Cancel this booking: /cancel/${cancellationToken}`;
 
-    // Create calendar event if write calendar is configured
-    let calendarEventId = null;
-    if (profile.write_calendar_id) {
-      const connection = app.db.prepare("SELECT * FROM calendar_connections WHERE id = ? AND status = 'connected'").get(profile.write_calendar_id);
-      if (connection) {
-        calendarEventId = await createCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, {
-          title: bookingTitle,
-          description: eventDescription,
-          start: startDate.toISOString(),
-          end: endDate.toISOString(),
-          attendees: allAttendees,
-        });
-      }
-    }
-
-    // Store booking
-    app.db.prepare(
-      "INSERT INTO bookings (profile_id, booker_name, booker_email, additional_attendees, title, description, start_time, end_time, duration_minutes, cancellation_token, status, calendar_event_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(
-      profile.id,
-      name.trim(),
-      email.trim(),
-      additional_attendees ? JSON.stringify(additional_attendees) : null,
-      bookingTitle,
-      bookingDescription,
-      startDate.toISOString(),
-      endDate.toISOString(),
-      durationMinutes,
-      cancellationToken,
-      'confirmed',
-      calendarEventId,
-      new Date().toISOString()
+    const writeCalendars = await app.db.getAll(
+      "SELECT c.* FROM calendar_connections c JOIN profile_write_calendars p ON c.id = p.calendar_connection_id WHERE p.profile_id = $1 AND c.status = 'connected'",
+      [profile.id]
     );
 
-    recordEmailBooking(app.db, email.trim(), request.url);
+    if (writeCalendars.length === 0 && profile.write_calendar_id) {
+      const fallback = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [profile.write_calendar_id]);
+      if (fallback) writeCalendars.push(fallback);
+    }
+
+    const createdEvents = [];
+    for (const connection of writeCalendars) {
+      try {
+        const evId = await createCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, { title: bookingTitle, description: eventDescription, start: startDate.toISOString(), end: endDate.toISOString(), attendees: allAttendees });
+        if (evId) createdEvents.push({ connectionId: connection.id, eventId: evId });
+      } catch (err) {
+        app.log.error(`Failed to create event on connection ${connection.id}: ${err.message}`);
+      }
+    }
+    const calendarEventIdStr = createdEvents.length > 0 ? JSON.stringify(createdEvents) : null;
+
+    const insertResult = await app.db.query(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, additional_attendees, title, description, start_time, end_time, duration_minutes, cancellation_token, status, calendar_event_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
+      [profile.id, name.trim(), email.trim(), additional_attendees ? JSON.stringify(additional_attendees) : null, bookingTitle, bookingDescription, startDate.toISOString(), endDate.toISOString(), durationMinutes, cancellationToken, 'confirmed', calendarEventIdStr, new Date().toISOString()]
+    );
+
+    await recordEmailBooking(app.db, email.trim(), request.url);
+
+    const admin = await app.db.getOne("SELECT notification_email, timezone FROM admin WHERE id = $1", [profile.user_id]);
+    if (admin && admin.notification_email) {
+      const baseUrl = `${request.protocol}://${request.hostname}${request.port && request.port !== 80 && request.port !== 443 ? ':' + request.port : ''}`;
+      const cancelUrl = `${baseUrl}/cancel/${cancellationToken}`;
+      sendNewBookingNotification(admin.notification_email, { title: bookingTitle, booker_name: name.trim(), booker_email: email.trim(), start_time: startDate.toISOString(), duration_minutes: durationMinutes }, profile.name, cancelUrl, admin.timezone || 'UTC').catch(() => {});
+    }
 
     return {
       booking: {
-        title: bookingTitle,
-        description: bookingDescription || undefined,
-        start_time: startDate.toISOString(),
-        end_time: endDate.toISOString(),
-        duration_minutes: durationMinutes,
-        booker_name: name.trim(),
-        booker_email: email.trim(),
-        additional_attendees: additional_attendees || [],
-        cancellation_token: cancellationToken,
-        calendar_event_id: calendarEventId,
-        meeting_link: profile.meeting_link_url || undefined,
-        attendees: allAttendees,
+        title: bookingTitle, description: bookingDescription || undefined, start_time: startDate.toISOString(), end_time: endDate.toISOString(), duration_minutes: durationMinutes, booker_name: name.trim(), booker_email: email.trim(), additional_attendees: additional_attendees || [], cancellation_token: cancellationToken, calendar_event_id: calendarEventIdStr, meeting_link: profile.meeting_link_url || undefined, attendees: allAttendees,
       },
     };
   });
@@ -646,74 +1121,60 @@ function registerBookingSubmitApi(app, { encryptionKey }) {
 
 async function deleteCalendarEvent(fetchFn, db, encryptionKey, connection, calendarEventId) {
   let accessToken;
-  try {
-    accessToken = decrypt(connection.encrypted_access_token, encryptionKey);
-  } catch {
-    accessToken = connection.encrypted_access_token;
-  }
+  try { accessToken = decrypt(connection.encrypted_access_token, encryptionKey); } catch { accessToken = connection.encrypted_access_token; }
 
   if (connection.provider === 'google') {
-    await fetchFn(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${calendarEventId}?sendUpdates=all`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    await fetchFn(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${calendarEventId}?sendUpdates=all`, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } });
   } else if (connection.provider === 'microsoft') {
-    await fetchFn(`https://graph.microsoft.com/v1.0/me/events/${calendarEventId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    await fetchFn(`https://graph.microsoft.com/v1.0/me/events/${calendarEventId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } });
   } else if (connection.provider === 'zoho') {
-    const calendarsResponse = await fetchFn('https://calendar.zoho.com/api/v1/calendars', {
-      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-    });
+    const calendarsResponse = await fetchFn('https://calendar.zoho.com/api/v1/calendars', { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
     const calendarsData = await calendarsResponse.json();
     const primaryCalendar = calendarsData.calendars.find(c => c.isprimary) || calendarsData.calendars[0];
-    await fetchFn(`https://calendar.zoho.com/api/v1/calendars/${primaryCalendar.uid}/events/${calendarEventId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-    });
+    await fetchFn(`https://calendar.zoho.com/api/v1/calendars/${primaryCalendar.uid}/events/${calendarEventId}`, { method: 'DELETE', headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
   }
 }
 
 function registerCancellationPage(app, { encryptionKey, baseLayout }) {
   app.get('/:token', async (request, reply) => {
     const { token } = request.params;
-    const booking = app.db.prepare("SELECT b.*, bp.name as profile_name FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.cancellation_token = ?").get(token);
+    const booking = await app.db.getOne("SELECT b.*, bp.name as profile_name FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.cancellation_token = $1", [token]);
 
     if (!booking) {
-      return reply.code(404).type('text/html').send(baseLayout('Not Found', '<h1>Booking not found</h1>'));
+      return reply.code(404).type('text/html').send(baseLayout('Not Found', `<div style="text-align: center; padding: 4rem 0;"><h1>Booking Not Found</h1><p style="color: var(--text-secondary);">The booking link you're looking for doesn't exist or has expired.</p><a href="/" role="button">Go Home</a></div>`));
     }
 
     if (booking.status === 'cancelled') {
-      return reply.type('text/html').send(baseLayout('Already Cancelled', `
-        <h1>Booking Already Cancelled</h1>
-        <p>This booking has already been cancelled.</p>
-      `));
+      return reply.type('text/html').send(baseLayout('Already Cancelled', `<div style="text-align: center; padding: 4rem 0;"><article style="max-width: 500px; margin: 0 auto;"><h1 style="color: var(--text-secondary);">Already Cancelled</h1><p>This booking has already been cancelled.</p><a href="/" role="button" class="secondary">Go Home</a></article></div>`));
     }
 
+    const profileOwner = await app.db.getOne('SELECT a.time_format FROM admin a JOIN booking_profiles bp ON bp.user_id = a.id WHERE bp.id = $1', [booking.profile_id]);
+    const cancelTimeFormat = (profileOwner && profileOwner.time_format) || '12h';
     const startDate = new Date(booking.start_time);
     const endDate = new Date(booking.end_time);
-    const dateStr = startDate.toISOString().split('T')[0];
-    const startTime = startDate.toISOString().split('T')[1].slice(0, 5);
-    const endTime = endDate.toISOString().split('T')[1].slice(0, 5);
+    const startLocal = startDate.toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: cancelTimeFormat !== '24h' });
+    const endLocal = endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: cancelTimeFormat !== '24h' });
     const attendees = [booking.booker_email];
-    if (booking.additional_attendees) {
-      try { attendees.push(...JSON.parse(booking.additional_attendees)); } catch {}
-    }
+    if (booking.additional_attendees) { try { attendees.push(...JSON.parse(booking.additional_attendees)); } catch {} }
 
     reply.type('text/html').send(baseLayout('Cancel Booking', `
-      <h1>Cancel Booking</h1>
-      <p>Are you sure you want to cancel this booking?</p>
-      <article>
-        <header><strong>${escapeHtml(booking.title)}</strong></header>
-        <p>Date: ${escapeHtml(dateStr)}</p>
-        <p>Time: ${escapeHtml(startTime)} - ${escapeHtml(endTime)} UTC</p>
-        <p>Attendees: ${attendees.map(e => escapeHtml(e)).join(', ')}</p>
-      </article>
-      <form method="POST" action="/api/cancel/${escapeHtml(token)}">
-        <button type="submit" class="contrast">Confirm Cancellation</button>
-      </form>
-      <a href="/" role="button" class="outline">Keep Booking</a>
+      <div style="max-width: 600px; margin: 3rem auto;">
+        <div style="margin-bottom: 0.5rem;"><i class="ph-duotone ph-warning-circle" style="font-size: 4rem; color: var(--error); display: block; margin: 0 auto 0.5rem auto;"></i></div>
+        <h1 style="text-align: center; margin-bottom: 1rem; color: var(--error);">Cancel Booking</h1>
+        <p style="text-align: center; color: var(--text-secondary); margin-bottom: 2rem;">Are you sure you want to cancel this booking? This action cannot be undone.</p>
+        <article style="border-color: var(--error-light); background: linear-gradient(135deg, var(--neutral-0) 0%, rgba(220, 38, 38, 0.05) 100%);">
+          <h3>${escapeHtml(booking.title)}</h3>
+          <p><strong>When:</strong> ${escapeHtml(startLocal)} - ${escapeHtml(endLocal)}</p>
+          <p><strong>Duration:</strong> ${booking.duration_minutes} minutes</p>
+          <p><strong>Attendees:</strong><br>${attendees.map(e => escapeHtml(e)).join('<br>')}</p>
+        </article>
+        <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+          <form method="POST" action="/api/cancel/${escapeHtml(token)}" style="flex: 1; margin: 0; background: transparent; border: none; padding: 0;">
+            <button type="submit" class="danger" style="width: 100%;">Yes, Cancel Booking</button>
+          </form>
+          <a href="/" role="button" class="secondary" style="flex: 1;">No, Keep Booking</a>
+        </div>
+      </div>
     `));
   });
 }
@@ -721,33 +1182,35 @@ function registerCancellationPage(app, { encryptionKey, baseLayout }) {
 function registerCancellationApi(app, { encryptionKey }) {
   app.post('/:token', async (request, reply) => {
     const { token } = request.params;
-    const booking = app.db.prepare("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.cancellation_token = ?").get(token);
+    const booking = await app.db.getOne("SELECT b.*, bp.write_calendar_id FROM bookings b JOIN booking_profiles bp ON b.profile_id = bp.id WHERE b.cancellation_token = $1", [token]);
 
-    if (!booking) {
-      return reply.code(404).send({ error: 'Booking not found' });
-    }
+    if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+    if (booking.status === 'cancelled') return reply.code(400).send({ error: 'This booking has already been cancelled' });
 
-    if (booking.status === 'cancelled') {
-      return reply.code(400).send({ error: 'This booking has already been cancelled' });
-    }
-
-    // Attempt to delete calendar event
-    if (booking.calendar_event_id && booking.write_calendar_id) {
-      const connection = app.db.prepare("SELECT * FROM calendar_connections WHERE id = ? AND status = 'connected'").get(booking.write_calendar_id);
-      if (connection) {
-        try {
-          await deleteCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, booking.calendar_event_id);
-        } catch {
-          // If calendar API fails, still proceed with local cancellation
+    if (booking.calendar_event_id) {
+      try {
+        const events = JSON.parse(booking.calendar_event_id);
+        for (const ev of events) {
+          const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [ev.connectionId]);
+          if (connection) { try { await deleteCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, ev.eventId); } catch {} }
+        }
+      } catch (err) {
+        if (booking.write_calendar_id) {
+          const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [booking.write_calendar_id]);
+          if (connection) { try { await deleteCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, booking.calendar_event_id); } catch {} }
         }
       }
     }
 
-    // Mark as cancelled in DB
-    app.db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(booking.id);
+    await app.db.run("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [booking.id]);
 
-    return { message: 'Booking successfully cancelled' };
+    if (booking.booker_email) {
+      const profile = await app.db.getOne("SELECT name FROM booking_profiles WHERE id = $1", [booking.profile_id]);
+      sendBookingCancelledNotification(booking.booker_email, { title: booking.title, start_time: booking.start_time, duration_minutes: booking.duration_minutes }, profile ? profile.name : 'Unknown', 'UTC').catch(() => {});
+    }
+
+    return reply.redirect(`/cancel/${token}`);
   });
 }
 
-module.exports = { registerBookingRoutes, registerSlotsApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook, computeSlots, removeConflicts, getCalendarBusySlots, getExistingBookings, VALID_DURATIONS };
+module.exports = { registerBookingRoutes, registerSlotsApi, registerBusynessApi, registerBookingSubmitApi, registerCancellationPage, registerCancellationApi, registerRateLimitHook, computeSlots, removeConflicts, getCalendarBusySlots, getExistingBookings, VALID_DURATIONS };
