@@ -17,6 +17,7 @@ const { registerDashboardRoutes } = require('./routes/admin/dashboard');
 const { registerBookingsRoutes } = require('./routes/admin/bookings');
 const { registerCalendarsRoutes } = require('./routes/admin/calendars');
 const { BASE_LAYOUT } = require('./views/layout');
+const { landingPage } = require('./views/landing');
 
 
 
@@ -62,13 +63,11 @@ async function buildApp(opts = {}) {
   registerHealthRoutes(app);
 
   app.get('/', async (request, reply) => {
-    reply.type('text/html').send(BASE_LAYOUT('Home', `
-      <div style="text-align: center; padding: 4rem 0;">
-        <img src="/img/icon.svg" alt="" style="height: 64px; margin-bottom: 1rem;">
-        <h1 style="font-size: 3rem; margin-bottom: 2rem;"><img src="/img/wordmark.svg" alt="Logo" style="height: 36px;"></h1>
-        <a href="/admin/login" role="button" style="padding: 12px 32px; font-size: 1rem;">Admin Login →</a>
-      </div>
-    `));
+    reply.redirect('/home');
+  });
+
+  app.get('/home', async (request, reply) => {
+    reply.type('text/html').send(landingPage());
   });
 
   app.register(async function adminRoutes(app) {

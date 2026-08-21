@@ -288,6 +288,11 @@ html[data-theme="dark"] body {
   filter: none;
 }
 
+.login-card article {
+  position: relative;
+  z-index: 1;
+}
+
 [data-theme="dark"] .login-card article {
   background: #1e1e1e;
   border-color: #2e2e2e;
@@ -3744,6 +3749,34 @@ input[type="radio"] {
   max-width: 420px;
   margin: 3rem auto;
   text-align: center;
+  position: relative;
+}
+
+.login-card::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 120%;
+  height: 120%;
+  background: radial-gradient(ellipse at center, rgba(40, 146, 215, 0.4) 0%, rgba(109, 174, 219, 0.2) 30%, transparent 70%);
+  filter: blur(60px);
+  pointer-events: none;
+  z-index: -1;
+  animation: glowPulse 4s ease-in-out infinite;
+}
+
+@keyframes glowPulse {
+  0%, 100% { opacity: 0.8; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
+}
+
+[data-theme="dark"] .login-card::before {
+  width: 140%;
+  height: 140%;
+  background: radial-gradient(ellipse at center, rgba(40, 146, 215, 0.5) 0%, rgba(109, 174, 219, 0.25) 35%, transparent 70%);
+  filter: blur(80px);
 }
 
 .login-logo {

@@ -5,7 +5,7 @@ const { BASE_LAYOUT, TIMEZONES } = require('../../views/layout');
 function registerSettingsRoutes(app) {
   app.get('/settings', async (request, reply) => {
     const adminId = request.session.get('adminId');
-    const admin = await app.db.getOne('SELECT timezone, notification_email, time_format FROM admin WHERE id = $1', [adminId]);
+    const admin = await app.db.getOne('SELECT timezone, notification_email, time_format, theme FROM admin WHERE id = $1', [adminId]);
     const token = reply.generateCsrf();
     const flash = request.session.get('flash') || '';
     request.session.set('flash', '');
@@ -31,6 +31,10 @@ function registerSettingsRoutes(app) {
               </div>
             </div>
             <div class="theme-switcher">
+              <button type="button" class="theme-option" data-theme="system" onclick="setTheme('system')">
+                <i class="ph-duotone ph-monitor"></i>
+                <span>System</span>
+              </button>
               <button type="button" class="theme-option" data-theme="light" onclick="setTheme('light')">
                 <i class="ph-duotone ph-sun"></i>
                 <span>Light</span>
@@ -41,14 +45,17 @@ function registerSettingsRoutes(app) {
               </button>
             </div>
             <script>
-              function setTheme(theme) {
-                document.documentElement.style.setProperty('transition', 'background-color 0.4s ease, color 0.3s ease');
-                document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : '');
-                if (theme === 'dark') {
-                  document.documentElement.setAttribute('data-theme', 'dark');
-                } else {
-                  document.documentElement.removeAttribute('data-theme');
+              function applyTheme(theme) {
+                var resolved = theme;
+                if (theme === 'system') {
+                  resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
                 }
+                document.documentElement.style.setProperty('transition', 'background-color 0.4s ease, color 0.3s ease');
+                document.documentElement.setAttribute('data-theme', resolved);
+                setTimeout(function() { document.documentElement.style.removeProperty('transition'); }, 500);
+              }
+              function setTheme(theme) {
+                applyTheme(theme);
                 localStorage.setItem('theme', theme);
                 document.querySelectorAll('.theme-option').forEach(function(btn) {
                   btn.classList.toggle('active', btn.dataset.theme === theme);
@@ -58,12 +65,20 @@ function registerSettingsRoutes(app) {
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: '_csrf=${token}&theme=' + theme
                 });
-                setTimeout(function() { document.documentElement.style.removeProperty('transition'); }, 500);
               }
               (function() {
-                var current = localStorage.getItem('theme') || 'light';
+                var dbTheme = '${admin.theme || 'system'}';
+                var current = localStorage.getItem('theme');
+                if (!current) {
+                  current = dbTheme;
+                  localStorage.setItem('theme', current);
+                  applyTheme(current);
+                }
                 document.querySelectorAll('.theme-option').forEach(function(btn) {
                   btn.classList.toggle('active', btn.dataset.theme === current);
+                });
+                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+                  if (localStorage.getItem('theme') === 'system') applyTheme('system');
                 });
               })();
             </script>
@@ -253,7 +268,7 @@ function registerSettingsRoutes(app) {
   app.post('/settings/theme', { preHandler: app.csrfProtection }, async (request, reply) => {
     const { theme } = request.body || {};
     const adminId = request.session.get('adminId');
-    const validTheme = theme === 'dark' ? 'dark' : 'light';
+    const validTheme = ['dark', 'light', 'system'].includes(theme) ? theme : 'system';
     await app.db.run('UPDATE admin SET theme = $1 WHERE id = $2', [validTheme, adminId]);
     return reply.send({ ok: true });
   });

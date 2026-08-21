@@ -84,7 +84,7 @@ function registerAuthRoutes(app) {
       dest = forceOnboarding || !(onboardingCheck && onboardingCheck.onboarding_completed_at) ? '/admin/onboarding' : '/admin/dashboard';
     }
     if (isAjax) {
-      return reply.send({ redirect: dest });
+      return reply.send({ redirect: dest, theme: admin.theme || 'system' });
     }
     return reply.redirect(dest);
   });

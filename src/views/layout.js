@@ -57,7 +57,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
   <meta charset="utf-8">
   ${isBookingPage ? '<meta name="booking-page" content="1">' : ''}
   <script>
-    (function(){var isBooking=document.querySelector('meta[name="booking-page"]');var key=isBooking?'booking-theme':'theme';var t=localStorage.getItem(key);if(t==='dark')document.documentElement.setAttribute('data-theme','dark');})();
+    (function(){var isBooking=document.querySelector('meta[name="booking-page"]');var key=isBooking?'booking-theme':'theme';var t=localStorage.getItem(key);if(t==='dark')document.documentElement.setAttribute('data-theme','dark');else if(t==='light')document.documentElement.setAttribute('data-theme','light');else{var d=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',d);}})();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title} - MeetsGo</title>
@@ -310,6 +310,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
           }).then(function(res) { return res.json().then(function(data) { return { status: res.status, data: data }; }); })
             .then(function(result) {
               btn.disabled = false;
+              if (result.data.theme) { localStorage.setItem('theme', result.data.theme); }
               if (result.data.redirect) { window.location.href = result.data.redirect; return; }
               if (result.data.error) { Toast.show(result.data.error, 'error'); }
             }).catch(function() { btn.disabled = false; Toast.show('Something went wrong. Please try again.', 'error'); });
