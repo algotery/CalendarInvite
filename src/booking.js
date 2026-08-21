@@ -4,7 +4,9 @@ const { TIMEZONES } = require('./views/layout');
 const { computeSlots, removeConflicts, getExistingBookings, HORIZON_MS } = require('./services/slot-calculator');
 const { getValidTokenForConnection, getCalendarBusySlots, createCalendarEvent, deleteCalendarEvent, fetchWithTimeout } = require('./services/calendar-service');
 const { checkIpRateLimit, recordIpRequest, checkEmailRateLimit, recordEmailBooking, getClientIp, registerRateLimitHook } = require('./services/rate-limiter');
+const { getEmailQueue, getCalendarQueue } = require('./queue');
 
+const STATIC_URL = process.env.STATIC_ASSETS_URL || '';
 const VALID_DURATIONS = [30, 45, 60];
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -47,8 +49,8 @@ function registerBookingRoutes(app, { encryptionKey, baseLayout }) {
         <div class="booking-header-left">
           <a href="/" class="booking-header-logo">
             <span class="booking-header-powered">POWERED BY</span>
-            <img src="/img/icon.svg" alt="" class="booking-header-logo-icon">
-            <img src="/img/wordmark.svg" alt="MeetsGo" class="booking-header-logo-wordmark">
+            <img src="${STATIC_URL}/img/icon.svg" alt="" class="booking-header-logo-icon">
+            <img src="${STATIC_URL}/img/wordmark.svg" alt="MeetsGo" class="booking-header-logo-wordmark">
           </a>
         </div>
         <div class="booking-header-center">
@@ -806,34 +808,56 @@ function registerBookingSubmitApi(app, { encryptionKey }) {
       if (fallback) writeCalendars.push(fallback);
     }
 
-    const createdEvents = [];
-    for (const connection of writeCalendars) {
-      try {
-        const evId = await createCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, { title: bookingTitle, description: eventDescription, start: startDate.toISOString(), end: endDate.toISOString(), attendees: allAttendees });
-        if (evId) createdEvents.push({ connectionId: connection.id, eventId: evId });
-      } catch (err) {
-        app.log.error(`Failed to create event on connection ${connection.id}: ${err.message}`);
-      }
-    }
-    const calendarEventIdStr = createdEvents.length > 0 ? JSON.stringify(createdEvents) : null;
-
     const insertResult = await app.db.query(
       "INSERT INTO bookings (profile_id, booker_name, booker_email, additional_attendees, title, description, start_time, end_time, duration_minutes, cancellation_token, status, calendar_event_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
-      [profile.id, name.trim(), email.trim(), additional_attendees ? JSON.stringify(additional_attendees) : null, bookingTitle, bookingDescription, startDate.toISOString(), endDate.toISOString(), durationMinutes, cancellationToken, 'confirmed', calendarEventIdStr, new Date().toISOString()]
+      [profile.id, name.trim(), email.trim(), additional_attendees ? JSON.stringify(additional_attendees) : null, bookingTitle, bookingDescription, startDate.toISOString(), endDate.toISOString(), durationMinutes, cancellationToken, 'confirmed', null, new Date().toISOString()]
     );
+    const bookingId = insertResult.rows[0].id;
 
     await recordEmailBooking(app.db, email.trim(), request.url);
+
+    const calendarQ = getCalendarQueue();
+    if (calendarQ && writeCalendars.length > 0) {
+      for (const connection of writeCalendars) {
+        await calendarQ.add('create_event', {
+          type: 'create_event',
+          data: { connectionId: connection.id, encryptionKey, bookingId, eventData: { title: bookingTitle, description: eventDescription, start: startDate.toISOString(), end: endDate.toISOString(), attendees: allAttendees } },
+        }, { attempts: 3, backoff: { type: 'exponential', delay: 2000 } });
+      }
+    } else if (writeCalendars.length > 0) {
+      const createdEvents = [];
+      for (const connection of writeCalendars) {
+        try {
+          const evId = await createCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, { title: bookingTitle, description: eventDescription, start: startDate.toISOString(), end: endDate.toISOString(), attendees: allAttendees });
+          if (evId) createdEvents.push({ connectionId: connection.id, eventId: evId });
+        } catch (err) {
+          app.log.error(`Failed to create event on connection ${connection.id}: ${err.message}`);
+        }
+      }
+      if (createdEvents.length > 0) {
+        await app.db.run("UPDATE bookings SET calendar_event_id = $1 WHERE id = $2", [JSON.stringify(createdEvents), bookingId]);
+      }
+    }
 
     const admin = await app.db.getOne("SELECT notification_email, timezone FROM admin WHERE id = $1", [profile.user_id]);
     if (admin && admin.notification_email) {
       const baseUrl = `${request.protocol}://${request.hostname}${request.port && request.port !== 80 && request.port !== 443 ? ':' + request.port : ''}`;
       const cancelUrl = `${baseUrl}/cancel/${cancellationToken}`;
-      sendNewBookingNotification(admin.notification_email, { title: bookingTitle, booker_name: name.trim(), booker_email: email.trim(), start_time: startDate.toISOString(), duration_minutes: durationMinutes }, profile.name, cancelUrl, admin.timezone || 'UTC').catch(() => {});
+
+      const emailQ = getEmailQueue();
+      if (emailQ) {
+        await emailQ.add('booking_notification', {
+          type: 'booking_notification',
+          data: { adminEmail: admin.notification_email, booking: { title: bookingTitle, booker_name: name.trim(), booker_email: email.trim(), start_time: startDate.toISOString(), duration_minutes: durationMinutes }, profileName: profile.name, cancelUrl, adminTimezone: admin.timezone || 'UTC' },
+        }, { attempts: 3, backoff: { type: 'exponential', delay: 1000 } });
+      } else {
+        sendNewBookingNotification(admin.notification_email, { title: bookingTitle, booker_name: name.trim(), booker_email: email.trim(), start_time: startDate.toISOString(), duration_minutes: durationMinutes }, profile.name, cancelUrl, admin.timezone || 'UTC').catch(() => {});
+      }
     }
 
     return {
       booking: {
-        title: bookingTitle, description: bookingDescription || undefined, start_time: startDate.toISOString(), end_time: endDate.toISOString(), duration_minutes: durationMinutes, booker_name: name.trim(), booker_email: email.trim(), additional_attendees: additional_attendees || [], cancellation_token: cancellationToken, calendar_event_id: calendarEventIdStr, meeting_link: profile.meeting_link_url || undefined, attendees: allAttendees,
+        title: bookingTitle, description: bookingDescription || undefined, start_time: startDate.toISOString(), end_time: endDate.toISOString(), duration_minutes: durationMinutes, booker_name: name.trim(), booker_email: email.trim(), additional_attendees: additional_attendees || [], cancellation_token: cancellationToken, meeting_link: profile.meeting_link_url || undefined, attendees: allAttendees,
       },
     };
   });
@@ -893,16 +917,31 @@ function registerCancellationApi(app, { encryptionKey }) {
     if (booking.status === 'cancelled') return reply.code(400).send({ error: 'This booking has already been cancelled' });
 
     if (booking.calendar_event_id) {
+      const calendarQ = getCalendarQueue();
       try {
         const events = JSON.parse(booking.calendar_event_id);
         for (const ev of events) {
-          const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [ev.connectionId]);
-          if (connection) { try { await deleteCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, ev.eventId); } catch {} }
+          if (calendarQ) {
+            await calendarQ.add('delete_event', {
+              type: 'delete_event',
+              data: { connectionId: ev.connectionId, encryptionKey, eventId: ev.eventId },
+            }, { attempts: 3, backoff: { type: 'exponential', delay: 2000 } });
+          } else {
+            const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [ev.connectionId]);
+            if (connection) { try { await deleteCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, ev.eventId); } catch {} }
+          }
         }
       } catch (err) {
         if (booking.write_calendar_id) {
-          const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [booking.write_calendar_id]);
-          if (connection) { try { await deleteCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, booking.calendar_event_id); } catch {} }
+          if (calendarQ) {
+            await calendarQ.add('delete_event', {
+              type: 'delete_event',
+              data: { connectionId: booking.write_calendar_id, encryptionKey, eventId: booking.calendar_event_id },
+            }, { attempts: 3, backoff: { type: 'exponential', delay: 2000 } });
+          } else {
+            const connection = await app.db.getOne("SELECT * FROM calendar_connections WHERE id = $1 AND status = 'connected'", [booking.write_calendar_id]);
+            if (connection) { try { await deleteCalendarEvent(app.fetchFn, app.db, encryptionKey, connection, booking.calendar_event_id); } catch {} }
+          }
         }
       }
     }
@@ -911,7 +950,15 @@ function registerCancellationApi(app, { encryptionKey }) {
 
     if (booking.booker_email) {
       const profile = await app.db.getOne("SELECT name FROM booking_profiles WHERE id = $1", [booking.profile_id]);
-      sendBookingCancelledNotification(booking.booker_email, { title: booking.title, start_time: booking.start_time, duration_minutes: booking.duration_minutes }, profile ? profile.name : 'Unknown', 'UTC').catch(() => {});
+      const emailQ = getEmailQueue();
+      if (emailQ) {
+        await emailQ.add('cancellation_notification', {
+          type: 'cancellation_notification',
+          data: { bookerEmail: booking.booker_email, booking: { title: booking.title, start_time: booking.start_time, duration_minutes: booking.duration_minutes }, profileName: profile ? profile.name : 'Unknown', bookerTimezone: 'UTC' },
+        }, { attempts: 3, backoff: { type: 'exponential', delay: 1000 } });
+      } else {
+        sendBookingCancelledNotification(booking.booker_email, { title: booking.title, start_time: booking.start_time, duration_minutes: booking.duration_minutes }, profile ? profile.name : 'Unknown', 'UTC').catch(() => {});
+      }
     }
 
     return reply.redirect(`/cancel/${token}`);

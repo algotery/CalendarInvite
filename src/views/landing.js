@@ -1,3 +1,5 @@
+const STATIC_URL = process.env.STATIC_ASSETS_URL || '';
+
 function landingPage() {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -5,7 +7,7 @@ function landingPage() {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MeetsGo — Scheduling, simplified.</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/svg+xml" href="${STATIC_URL}/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -911,7 +913,7 @@ function landingPage() {
     <!-- Nav -->
     <nav class="nav">
       <div class="nav-logo">
-        <img src="/img/logo.svg" alt="MeetsGo" style="height: 32px;">
+        <img src="${STATIC_URL}/img/logo.svg" alt="MeetsGo" style="height: 32px;">
       </div>
       <a href="/admin/login" class="nav-cta">Get Started</a>
     </nav>
@@ -1071,7 +1073,7 @@ function landingPage() {
     <footer class="footer">
       <div class="footer-grid">
         <div class="footer-brand">
-          <img src="/img/logo.svg" alt="MeetsGo">
+          <img src="${STATIC_URL}/img/logo.svg" alt="MeetsGo">
           <p>Simple, beautiful scheduling for professionals and teams.</p>
         </div>
         <div class="footer-col">

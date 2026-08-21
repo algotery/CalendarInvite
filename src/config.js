@@ -12,6 +12,9 @@ if (process.env.NODE_ENV === 'production') {
   if (process.env.SESSION_SECRET.length < 32) {
     throw new Error('SESSION_SECRET must be at least 32 characters in production');
   }
+  if (!process.env.REDIS_URL) {
+    throw new Error('REDIS_URL is required in production');
+  }
 }
 
 const config = Object.freeze({
@@ -21,6 +24,15 @@ const config = Object.freeze({
   databaseUrl: process.env.DATABASE_URL,
   encryptionKey: process.env.TOKEN_ENCRYPTION_KEY,
   sessionSecret: process.env.SESSION_SECRET,
+  entryMode: process.env.ENTRY_MODE || 'all',
+  redis: {
+    url: process.env.REDIS_URL || null,
+  },
+  aws: {
+    region: process.env.AWS_REGION || 'eu-central-1',
+    sesFromEmail: process.env.AWS_SES_FROM_EMAIL || null,
+  },
+  staticAssetsUrl: process.env.STATIC_ASSETS_URL || '',
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,

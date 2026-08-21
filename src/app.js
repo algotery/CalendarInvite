@@ -18,12 +18,17 @@ const { registerBookingsRoutes } = require('./routes/admin/bookings');
 const { registerCalendarsRoutes } = require('./routes/admin/calendars');
 const { BASE_LAYOUT } = require('./views/layout');
 const { landingPage } = require('./views/landing');
+const { createSessionStore } = require('./session-store');
 
 
 
 
 async function buildApp(opts = {}) {
-  const app = fastify({ logger: opts.logger || false });
+  const isProduction = process.env.NODE_ENV === 'production';
+  const app = fastify({
+    logger: opts.logger || false,
+    trustProxy: isProduction,
+  });
 
   const connectionString = opts.connectionString || process.env.DATABASE_URL;
   const db = await createDatabase(connectionString);
@@ -39,11 +44,13 @@ async function buildApp(opts = {}) {
   app.decorate('fetchFn', opts.fetchFn || globalThis.fetch);
   app.decorate('zohoFetch', null);
 
-  app.register(fastifyStatic, {
-    root: path.join(__dirname, '..', 'public'),
-    prefix: '/',
-    maxAge: '7d',
-  });
+  if (!isProduction || process.env.SERVE_STATIC === '1') {
+    app.register(fastifyStatic, {
+      root: path.join(__dirname, '..', 'public'),
+      prefix: '/',
+      maxAge: '7d',
+    });
+  }
 
   app.register(formbody);
   app.register(cookie);
@@ -54,9 +61,23 @@ async function buildApp(opts = {}) {
   if (!encryptionKey) {
     throw new Error('TOKEN_ENCRYPTION_KEY environment variable is required');
   }
+
+  const redisUrl = opts.redisUrl || process.env.REDIS_URL;
+  const { store: sessionStore, redisClient } = await createSessionStore(redisUrl);
+  if (redisClient) {
+    app.decorate('redisClient', redisClient);
+  }
+
   app.register(session, {
     secret: sessionSecret,
-    cookie: { secure: false, httpOnly: true, sameSite: 'lax' },
+    store: sessionStore || undefined,
+    saveUninitialized: false,
+    cookie: {
+      secure: isProduction,
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+    },
   });
   app.register(csrf, { sessionPlugin: '@fastify/session' });
 
@@ -72,9 +93,11 @@ async function buildApp(opts = {}) {
 
   app.register(async function adminRoutes(app) {
     app.setErrorHandler(async (error, request, reply) => {
+      if (reply.sent) return;
       if ((error.code === 'FST_CSRF_MISSING_SECRET' || error.code === 'FST_CSRF_INVALID_TOKEN') && request.url === '/admin/login') {
         return reply.redirect('/admin/login');
       }
+      if (error.code === 'FST_ERR_REP_ALREADY_SENT') return;
       reply.code(error.statusCode || 500).send({ statusCode: error.statusCode || 500, error: error.name, message: error.message });
     });
 

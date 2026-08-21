@@ -2,6 +2,8 @@ const bcrypt = require('bcrypt');
 const { escapeHtml } = require('../../utils/html');
 const { BASE_LAYOUT } = require('../../views/layout');
 
+const STATIC_URL = process.env.STATIC_ASSETS_URL || '';
+
 function registerAuthRoutes(app) {
   app.get('/login', async (request, reply) => {
     const token = reply.generateCsrf();
@@ -10,8 +12,8 @@ function registerAuthRoutes(app) {
     reply.type('text/html').send(BASE_LAYOUT('Login', `
       <div class="login-card">
         <article>
-          <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
-          <div class="login-title"><img src="/img/wordmark.svg" alt="Logo" style="height: 24px;"></div>
+          <a href="/home" class="login-logo"><img src="${STATIC_URL}/img/icon.svg" alt="" style="height: 48px;"></a>
+          <a href="/home" class="login-title"><img src="${STATIC_URL}/img/wordmark.svg" alt="Logo" style="height: 24px;"></a>
           <div class="login-subtitle">Welcome back! Sign in to your account.</div>
           <form method="POST" action="/admin/login">
             <input type="hidden" name="_csrf" value="${token}">
@@ -47,8 +49,8 @@ function registerAuthRoutes(app) {
       return reply.type('text/html').send(BASE_LAYOUT('Login', `
         <div class="login-card">
           <article>
-            <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
-            <div class="login-title"><img src="/img/wordmark.svg" alt="Logo" style="height: 24px;"></div>
+            <a href="/home" class="login-logo"><img src="${STATIC_URL}/img/icon.svg" alt="" style="height: 48px;"></a>
+            <a href="/home" class="login-title"><img src="${STATIC_URL}/img/wordmark.svg" alt="Logo" style="height: 24px;"></a>
             <div class="login-subtitle">Welcome back! Sign in to your account.</div>
             <div role="alert" class="error">
               Invalid email or password. Please try again.
@@ -94,8 +96,8 @@ function registerAuthRoutes(app) {
     reply.type('text/html').send(BASE_LAYOUT('Register', `
       <div class="login-card">
         <article>
-          <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
-          <div class="login-title"><img src="/img/wordmark.svg" alt="Logo" style="height: 24px;"></div>
+          <a href="/home" class="login-logo"><img src="${STATIC_URL}/img/icon.svg" alt="" style="height: 48px;"></a>
+          <a href="/home" class="login-title"><img src="${STATIC_URL}/img/wordmark.svg" alt="Logo" style="height: 24px;"></a>
           <div class="login-subtitle">Create your account to get started.</div>
           <form method="POST" action="/admin/register">
             <input type="hidden" name="_csrf" value="${token}">
@@ -135,8 +137,8 @@ function registerAuthRoutes(app) {
       return reply.type('text/html').send(BASE_LAYOUT('Register', `
       <div class="login-card">
         <article>
-          <div class="login-logo"><img src="/img/icon.svg" alt="" style="height: 48px;"></div>
-          <div class="login-title"><img src="/img/wordmark.svg" alt="Logo" style="height: 24px;"></div>
+          <a href="/home" class="login-logo"><img src="${STATIC_URL}/img/icon.svg" alt="" style="height: 48px;"></a>
+          <a href="/home" class="login-title"><img src="${STATIC_URL}/img/wordmark.svg" alt="Logo" style="height: 24px;"></a>
           <div class="login-subtitle">Create your account to get started.</div>
           <div role="alert" class="error">${escapeHtml(msg)}</div>
           <form method="POST" action="/admin/register">

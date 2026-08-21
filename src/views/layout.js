@@ -14,15 +14,17 @@ const TIMEZONES = [
 
 const { escapeHtml } = require('../utils/html');
 
+const STATIC_URL = process.env.STATIC_ASSETS_URL || '';
+
 const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage = false) => {
   const bodyClass = isBookingPage ? ' class="booking-page"' : '';
   const content = isAdmin ? `
 <div class="app-layout">
   <aside class="sidebar">
-    <div class="sidebar-header">
-      <img src="/img/icon.svg" alt="" class="sidebar-logo-icon">
-      <img src="/img/wordmark.svg" alt="Logo" class="sidebar-logo-wordmark">
-    </div>
+    <a href="/admin/dashboard" class="sidebar-header">
+      <img src="${STATIC_URL}/img/icon.svg" alt="" class="sidebar-logo-icon">
+      <img src="${STATIC_URL}/img/wordmark.svg" alt="Logo" class="sidebar-logo-wordmark">
+    </a>
     <div class="sidebar-create">
       <a href="/admin/profiles/new" class="profile-overlay-trigger" data-url="/admin/profiles/new?partial=1"><i class="ph ph-plus"></i> Create</a>
     </div>
@@ -61,10 +63,10 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title} - MeetsGo</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/svg+xml" href="${STATIC_URL}/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="${STATIC_URL}/css/styles.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" media="print" onload="this.media='all'">
   <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css" media="print" onload="this.media='all'">

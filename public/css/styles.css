@@ -1038,6 +1038,7 @@ body.booking-page {
   align-items: center;
   gap: 10px;
   overflow: hidden;
+  text-decoration: none;
 }
 
 .sidebar-header i {
@@ -3780,15 +3781,21 @@ input[type="radio"] {
 }
 
 .login-logo {
+  display: block;
   font-size: 2.5rem;
   margin-bottom: var(--spacing-md);
+  text-decoration: none;
+  text-align: center;
 }
 
 .login-title {
+  display: block;
   font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-bold);
   margin-bottom: var(--spacing-xs);
   color: var(--text-primary);
+  text-decoration: none;
+  text-align: center;
 }
 
 .login-subtitle {
