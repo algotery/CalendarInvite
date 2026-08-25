@@ -5148,11 +5148,11 @@ input[type="radio"] {
   transition: box-shadow 200ms var(--ease-out), border-color 200ms var(--ease-out), transform 120ms var(--ease-out);
   box-shadow: var(--shadow-sm);
   position: relative;
-  z-index: 1;
 }
 
 .profile-card.menu-open {
   z-index: 100;
+  position: relative;
 }
 
 .profile-card:hover {

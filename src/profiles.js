@@ -525,6 +525,9 @@ function registerProfileRoutes(app) {
       await app.db.run("INSERT INTO schedule_overrides (profile_id, date, is_blocked, custom_ranges) VALUES ($1, $2, $3, $4)", [profileId, o.date, o.is_blocked, o.custom_ranges]);
     }
 
+    if (request.headers['accept'] === 'application/json') {
+      return { success: true, profileId };
+    }
     return reply.redirect('/admin/profiles');
   });
 

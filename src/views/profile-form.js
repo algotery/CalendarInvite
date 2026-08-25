@@ -151,7 +151,7 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
                 </div>
                 <div class="avatar-upload-info">
                   <span class="avatar-upload-label">Profile Logo</span>
-                  <span class="avatar-upload-hint">${isEdit ? 'Recommended: 400×100px or similar ratio, max 5MB' : 'You can upload a logo after creating the profile'}</span>
+                  <span class="avatar-upload-hint">Recommended: 400×100px or similar ratio, max 5MB</span>
                   ${isEdit && profile.avatar_url ? `<button type="button" class="avatar-remove-btn" id="avatar-remove-btn"><i class="ph ph-trash"></i> Remove</button>` : ''}
                 </div>
               </div>
@@ -437,10 +437,65 @@ function profileFormHtml(token, profile, calendars, attendees, schedules, error,
         var removeBtn = document.getElementById('avatar-remove-btn');
         var profileId = '${isEdit ? profile.id : ''}';
         var isNewProfile = !profileId;
+        var pendingFile = null;
 
         if (isNewProfile) {
-          container.addEventListener('click', function() {
-            Toast.show('Save the profile first, then upload a logo.', 'info');
+          container.addEventListener('click', function() { fileInput.click(); });
+          fileInput.addEventListener('change', function() {
+            if (!fileInput.files.length) return;
+            var file = fileInput.files[0];
+            if (file.size > 5 * 1024 * 1024) { Toast.show('File too large. Maximum 5MB.', 'error'); return; }
+            if (!['image/jpeg','image/png','image/webp','image/gif'].includes(file.type)) { Toast.show('Invalid file type.', 'error'); return; }
+            pendingFile = file;
+            var reader = new FileReader();
+            reader.onload = function(e) {
+              preview.innerHTML = '<img src="' + e.target.result + '" alt="Profile logo" class="avatar-preview-img" id="avatar-img">' +
+                '<div class="avatar-upload-overlay" id="avatar-overlay"><i class="ph-bold ph-upload-simple"></i><span>Change</span></div>';
+            };
+            reader.readAsDataURL(file);
+          });
+
+          container.addEventListener('dragover', function(e) { e.preventDefault(); container.classList.add('dragover'); });
+          container.addEventListener('dragleave', function() { container.classList.remove('dragover'); });
+          container.addEventListener('drop', function(e) {
+            e.preventDefault();
+            container.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+              fileInput.files = e.dataTransfer.files;
+              fileInput.dispatchEvent(new Event('change'));
+            }
+          });
+
+          // Intercept form submit for new profiles
+          var form = document.getElementById('profile-form');
+          form.addEventListener('submit', function(e) {
+            if (!pendingFile) return; // let normal submit happen
+            e.preventDefault();
+            var formData = new FormData(form);
+            var submitBtn = form.querySelector('button[type="submit"], .floating-modal-footer .btn-primary');
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Creating...'; }
+
+            fetch(form.action + (form.action.includes('?') ? '&' : '?') + 'partial=1', {
+              method: 'POST',
+              headers: { 'Accept': 'application/json' },
+              body: new URLSearchParams(formData)
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+              if (!data.success || !data.profileId) {
+                Toast.show(data.error || 'Failed to create profile.', 'error');
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Create'; }
+                return;
+              }
+              var avatarData = new FormData();
+              avatarData.append('file', pendingFile);
+              return fetch('/admin/profiles/' + data.profileId + '/avatar', { method: 'POST', body: avatarData })
+                .then(function() { window.location.href = '/admin/profiles'; });
+            })
+            .catch(function() {
+              Toast.show('Something went wrong.', 'error');
+              if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Create'; }
+            });
           });
           return;
         }
