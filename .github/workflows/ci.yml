@@ -1,0 +1,81 @@
+# CI Pipeline — main branch'e yapılan push ve PR'larda çalışır
+name: CI
+
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ TRIGGER (Ne zaman çalışır?)                                         │
+# │                                                                     │
+# │ push.branches: [main] → main'e doğrudan push olduğunda             │
+# │ pull_request.branches: [main] → main'e açılan PR'larda             │
+# │                                                                     │
+# │ Feature branch'lere yapılan push'larda çalışMAZ.                    │
+# │ Sadece o branch'ten main'e PR açıldığında tetiklenir.               │
+# └─────────────────────────────────────────────────────────────────────┘
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ JOBS                                                                │
+# │                                                                     │
+# │ Şimdilik tek bir "test" job'ı var.                                  │
+# │ İleride build, deploy gibi job'lar eklenebilir.                     │
+# └─────────────────────────────────────────────────────────────────────┘
+jobs:
+  test:
+    # ─── Runner seçimi ───────────────────────────────────────────────
+    # GitHub'ın ücretsiz sunduğu Ubuntu makinesi.
+    # Public repo'larda tamamen ücretsiz, private repo'larda aylık
+    # 2000 dakika ücretsiz kullanım hakkın var.
+    runs-on: ubuntu-latest
+
+    # ─── Strateji: Node versiyonu ────────────────────────────────────
+    # matrix ile birden fazla Node versiyonunda test edebilirsin.
+    # Şimdilik sadece 20 kullanıyoruz çünkü package.json ">=20" diyor.
+    # İleride [20, 22] yaparak iki versiyonda test edebilirsin.
+    strategy:
+      matrix:
+        node-version: [20]
+
+    steps:
+      # ─── 1. Kodu çek ────────────────────────────────────────────────
+      # actions/checkout → repo'nun kodunu runner makinesine klonlar.
+      # Bu olmadan runner boş bir makinedir, koduna erişemez.
+      - uses: actions/checkout@v4
+
+      # ─── 2. Node.js kur ─────────────────────────────────────────────
+      # actions/setup-node → istediğin Node versiyonunu kurar.
+      # cache: 'npm' → node_modules'ı cache'ler, sonraki çalışmalarda
+      # npm ci çok daha hızlı olur (değişmediyse indir+kurma atlanır).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      # ─── 3. Bağımlılıkları kur ──────────────────────────────────────
+      # npm ci → package-lock.json'dan EXACT versiyonları kurar.
+      # npm install'dan farkı: lock dosyasını değiştirmez,
+      # CI ortamında tutarlılığı garantiler.
+      - run: npm ci
+
+      # ─── 4. Testleri çalıştır ───────────────────────────────────────
+      # npm test → package.json'daki "test" script'ini çalıştırır:
+      # "node --test test/**/*.test.js"
+      # Testler in-memory SQLite kullanıyor, harici DB'ye gerek yok.
+      - run: npm test
+
+  # ─── Docker build doğrulaması ──────────────────────────────────────
+  # Testler geçtikten sonra Docker image'larının build olabildiğini
+  # doğrular. Push etmez, sadece "build başarılı mı?" kontrolü yapar.
+  # Bu sayede Dockerfile'da syntax hatası varsa PR'da yakalarız.
+  build:
+    runs-on: ubuntu-latest
+    needs: test  # test job'ı başarılı olmalı ki bu çalışsın
+    steps:
+      - uses: actions/checkout@v4
+
+      # docker compose build → tüm service'lerin image'larını build eder.
+      # --no-cache kullanmıyoruz çünkü GitHub Actions zaten her seferinde
+      # temiz bir makinede çalışır.
+      - run: docker compose build
