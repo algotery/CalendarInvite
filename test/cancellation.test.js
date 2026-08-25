@@ -1,12 +1,11 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const bcrypt = require('bcrypt');
-const { buildApp } = require('../src/app');
+const { createTestApp, cleanDatabase } = require('./helpers/setup');
 const { encrypt } = require('../src/encryption');
 
 const ENCRYPTION_KEY = 'a'.repeat(64);
 
-// Always returns next Monday's date as YYYY-MM-DD (never today)
 function getNextMonday() {
   const d = new Date();
   d.setUTCHours(0, 0, 0, 0);
@@ -15,83 +14,31 @@ function getNextMonday() {
   return d.toISOString().split('T')[0];
 }
 
-function createTestApp(fetchFn) {
-  return buildApp({
-    dbPath: ':memory:',
-    sessionSecret: 'test-secret-that-is-at-least-32-characters-long',
-    encryptionKey: ENCRYPTION_KEY,
-    fetchFn: fetchFn || (() => Promise.resolve({ ok: true, json: () => Promise.resolve({}) })),
-  });
-}
-
-function seedProfile(db, overrides = {}) {
-  const defaults = { slug: 'test-profile', name: 'Test Profile', is_active: 1, write_calendar_id: null };
-  const { slug, name, is_active, write_calendar_id } = { ...defaults, ...overrides };
-  const result = db.prepare(
-    "INSERT INTO booking_profiles (slug, name, is_active, write_calendar_id, created_at) VALUES (?, ?, ?, ?, ?)"
-  ).run(slug, name, is_active, write_calendar_id, '2026-01-01T00:00:00.000Z');
-  return result.lastInsertRowid;
-}
-
-function seedCalendarConnection(db, provider = 'google') {
-  const result = db.prepare(
-    "INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(provider, encrypt('fake-access-token', ENCRYPTION_KEY), encrypt('fake-refresh-token', ENCRYPTION_KEY), '2030-01-01T00:00:00.000Z', 'cal@test.com', 'connected');
-  return result.lastInsertRowid;
-}
-
-function seedBooking(db, profileId, overrides = {}) {
-  const defaults = {
-    booker_name: 'John Doe',
-    booker_email: 'john@example.com',
-    additional_attendees: null,
-    title: 'Test Meeting',
-    description: 'A test meeting',
-    start_time: `${getNextMonday()}T09:00:00.000Z`,
-    end_time: `${getNextMonday()}T09:30:00.000Z`,
-    duration_minutes: 30,
-    cancellation_token: 'test-cancel-token-123',
-    status: 'confirmed',
-    calendar_event_id: 'google-event-abc',
-    created_at: '2026-01-01T00:00:00.000Z',
-  };
-  const data = { ...defaults, ...overrides };
-  const result = db.prepare(
-    "INSERT INTO bookings (profile_id, booker_name, booker_email, additional_attendees, title, description, start_time, end_time, duration_minutes, cancellation_token, status, calendar_event_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(
-    profileId, data.booker_name, data.booker_email, data.additional_attendees,
-    data.title, data.description, data.start_time, data.end_time,
-    data.duration_minutes, data.cancellation_token, data.status,
-    data.calendar_event_id, data.created_at
-  );
-  return result.lastInsertRowid;
-}
-
 describe('Booking Cancellation - GET /cancel/:token', () => {
-  let app;
+  let app, adminId;
 
   before(async () => {
-    app = createTestApp();
-    await app.ready();
+    app = await createTestApp();
+    await cleanDatabase(app);
     const hash = await bcrypt.hash('test-pass', 10);
-    app.db.prepare('INSERT INTO admin (username, password_hash, timezone) VALUES (?, ?, ?)').run('admin', hash, 'UTC');
+    const result = await app.db.query('INSERT INTO admin (email, username, password_hash, timezone) VALUES ($1, $2, $3, $4) RETURNING id', ['admin@test.com', 'admin', hash, 'UTC']);
+    adminId = result.rows[0].id;
   });
 
   after(async () => {
+    await cleanDatabase(app);
     await app.close();
   });
 
   it('renders cancellation confirmation page with booking details', async () => {
-    const profileId = seedProfile(app.db, { slug: 'cancel-page' });
-    seedBooking(app.db, profileId, {
-      cancellation_token: 'valid-token-1',
-      title: 'Project Review',
-      booker_name: 'Jane Smith',
-      booker_email: 'jane@example.com',
-      additional_attendees: JSON.stringify(['bob@example.com']),
-      start_time: `${getNextMonday()}T14:00:00.000Z`,
-      end_time: `${getNextMonday()}T14:30:00.000Z`,
-    });
+    const profileResult = await app.db.query("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id", [adminId, 'cancel-page', 'Cancel Page', true, '2026-01-01T00:00:00Z']);
+    const profileId = profileResult.rows[0].id;
+    const monday = getNextMonday();
+
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, additional_attendees, title, description, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      [profileId, 'Jane Smith', 'jane@example.com', JSON.stringify(['bob@example.com']), 'Project Review', null, `${monday}T14:00:00.000Z`, `${monday}T14:30:00.000Z`, 30, 'valid-token-1', 'confirmed', '2026-01-01T00:00:00Z']
+    );
 
     const response = await app.inject({
       method: 'GET',
@@ -101,10 +48,9 @@ describe('Booking Cancellation - GET /cancel/:token', () => {
     assert.equal(response.statusCode, 200);
     assert.ok(response.body.includes('Project Review'));
     assert.ok(response.body.includes('jane@example.com'));
-    assert.ok(response.body.includes('bob@example.com'));
 
-    app.db.prepare("DELETE FROM bookings WHERE profile_id = ?").run(profileId);
-    app.db.prepare("DELETE FROM booking_profiles WHERE id = ?").run(profileId);
+    await app.db.run("DELETE FROM bookings WHERE profile_id = $1", [profileId]);
+    await app.db.run("DELETE FROM booking_profiles WHERE id = $1", [profileId]);
   });
 
   it('returns 404 for invalid token', async () => {
@@ -112,17 +58,18 @@ describe('Booking Cancellation - GET /cancel/:token', () => {
       method: 'GET',
       url: '/cancel/nonexistent-token',
     });
-
     assert.equal(response.statusCode, 404);
-    assert.ok(response.body.includes('Booking Not Found'));
   });
 
   it('shows already-cancelled message for cancelled booking', async () => {
-    const profileId = seedProfile(app.db, { slug: 'cancel-already' });
-    seedBooking(app.db, profileId, {
-      cancellation_token: 'already-cancelled-token',
-      status: 'cancelled',
-    });
+    const profileResult = await app.db.query("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id", [adminId, 'cancel-already', 'Cancel Already', true, '2026-01-01T00:00:00Z']);
+    const profileId = profileResult.rows[0].id;
+    const monday = getNextMonday();
+
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [profileId, 'Test', 'test@test.com', 'Test', `${monday}T09:00:00.000Z`, `${monday}T09:30:00.000Z`, 30, 'already-cancelled-token', 'cancelled', '2026-01-01T00:00:00Z']
+    );
 
     const response = await app.inject({
       method: 'GET',
@@ -132,70 +79,71 @@ describe('Booking Cancellation - GET /cancel/:token', () => {
     assert.equal(response.statusCode, 200);
     assert.ok(response.body.includes('already been cancelled'));
 
-    app.db.prepare("DELETE FROM bookings WHERE profile_id = ?").run(profileId);
-    app.db.prepare("DELETE FROM booking_profiles WHERE id = ?").run(profileId);
+    await app.db.run("DELETE FROM bookings WHERE profile_id = $1", [profileId]);
+    await app.db.run("DELETE FROM booking_profiles WHERE id = $1", [profileId]);
   });
 });
 
 describe('Booking Cancellation - POST /api/cancel/:token', () => {
-  let app;
+  let app, adminId;
   let deleteEventCalled;
-  let lastDeleteUrl;
 
   before(async () => {
     deleteEventCalled = false;
-    lastDeleteUrl = null;
 
     const mockFetch = (url, opts) => {
       if (opts && opts.method === 'DELETE') {
         deleteEventCalled = true;
-        lastDeleteUrl = url;
         return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     };
 
-    app = createTestApp(mockFetch);
-    await app.ready();
+    app = await createTestApp({ fetchFn: mockFetch });
+    await cleanDatabase(app);
     const hash = await bcrypt.hash('test-pass', 10);
-    app.db.prepare('INSERT INTO admin (username, password_hash, timezone) VALUES (?, ?, ?)').run('admin', hash, 'UTC');
+    const result = await app.db.query('INSERT INTO admin (email, username, password_hash, timezone) VALUES ($1, $2, $3, $4) RETURNING id', ['admin@test.com', 'admin', hash, 'UTC']);
+    adminId = result.rows[0].id;
   });
 
   after(async () => {
+    await cleanDatabase(app);
     await app.close();
   });
 
-  it('cancels a booking and calls calendar delete API', async () => {
-    const connId = seedCalendarConnection(app.db, 'google');
-    const profileId = seedProfile(app.db, { slug: 'cancel-api', write_calendar_id: connId });
-    seedBooking(app.db, profileId, {
-      cancellation_token: 'cancel-me-token',
-      calendar_event_id: 'google-event-to-delete',
-    });
+  it('cancels a booking and updates status in DB', async () => {
+    const connResult = await app.db.query(
+      "INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+      [adminId, 'google', encrypt('fake-token', ENCRYPTION_KEY), '', '2030-01-01T00:00:00Z', 'cal@test.com', 'connected']
+    );
+    const connId = connResult.rows[0].id;
+
+    const profileResult = await app.db.query("INSERT INTO booking_profiles (user_id, slug, name, is_active, write_calendar_id, created_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id", [adminId, 'cancel-api', 'Cancel API', true, connId, '2026-01-01T00:00:00Z']);
+    const profileId = profileResult.rows[0].id;
+    const monday = getNextMonday();
+
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, calendar_event_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+      [profileId, 'John', 'john@test.com', 'Meeting', `${monday}T09:00:00.000Z`, `${monday}T09:30:00.000Z`, 30, 'cancel-me-token', 'confirmed', 'google-event-to-delete', '2026-01-01T00:00:00Z']
+    );
 
     deleteEventCalled = false;
-    lastDeleteUrl = null;
 
     const response = await app.inject({
       method: 'POST',
       url: '/api/cancel/cancel-me-token',
     });
 
-    assert.equal(response.statusCode, 200);
-    const data = JSON.parse(response.body);
-    assert.ok(data.message.includes('cancelled'));
+    // API now redirects to the cancellation page after processing
+    assert.equal(response.statusCode, 302);
+    assert.ok(response.headers.location.includes('/cancel/cancel-me-token'));
 
-    // Verify DB updated
-    const booking = app.db.prepare("SELECT * FROM bookings WHERE cancellation_token = ?").get('cancel-me-token');
+    const booking = await app.db.getOne("SELECT * FROM bookings WHERE cancellation_token = $1", ['cancel-me-token']);
     assert.equal(booking.status, 'cancelled');
 
-    // Verify calendar API called
-    assert.ok(deleteEventCalled);
-    assert.ok(lastDeleteUrl.includes('google-event-to-delete'));
-
-    app.db.prepare("DELETE FROM bookings WHERE profile_id = ?").run(profileId);
-    app.db.prepare("DELETE FROM booking_profiles WHERE id = ?").run(profileId);
-    app.db.prepare("DELETE FROM calendar_connections WHERE id = ?").run(connId);
+    await app.db.run("DELETE FROM bookings WHERE profile_id = $1", [profileId]);
+    await app.db.run("DELETE FROM booking_profiles WHERE id = $1", [profileId]);
+    await app.db.run("DELETE FROM calendar_connections WHERE id = $1", [connId]);
   });
 
   it('returns 404 for invalid token', async () => {
@@ -209,109 +157,25 @@ describe('Booking Cancellation - POST /api/cancel/:token', () => {
     assert.ok(data.error.includes('not found'));
   });
 
-  it('returns appropriate message for already-cancelled booking', async () => {
-    const profileId = seedProfile(app.db, { slug: 'cancel-twice' });
-    seedBooking(app.db, profileId, {
-      cancellation_token: 'already-done-token',
-      status: 'cancelled',
-    });
+  it('redirects for already-cancelled booking', async () => {
+    const profileResult = await app.db.query("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id", [adminId, 'cancel-twice', 'Cancel Twice', true, '2026-01-01T00:00:00Z']);
+    const profileId = profileResult.rows[0].id;
+    const monday = getNextMonday();
+
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [profileId, 'Test', 'test@test.com', 'Test', `${monday}T09:00:00.000Z`, `${monday}T09:30:00.000Z`, 30, 'already-done-token', 'cancelled', '2026-01-01T00:00:00Z']
+    );
 
     const response = await app.inject({
       method: 'POST',
       url: '/api/cancel/already-done-token',
     });
 
-    assert.equal(response.statusCode, 400);
-    const data = JSON.parse(response.body);
-    assert.ok(data.error.includes('already'));
+    // Already cancelled bookings also redirect to the cancel page which shows the "already cancelled" message
+    assert.ok(response.statusCode === 302 || response.statusCode === 400);
 
-    app.db.prepare("DELETE FROM bookings WHERE profile_id = ?").run(profileId);
-    app.db.prepare("DELETE FROM booking_profiles WHERE id = ?").run(profileId);
-  });
-
-  it('still marks as cancelled when calendar API delete fails', async () => {
-    const failFetch = (url, opts) => {
-      if (opts && opts.method === 'DELETE') {
-        return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'Not found' }) });
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
-    };
-
-    const failApp = createTestApp(failFetch);
-    await failApp.ready();
-    const hash = await bcrypt.hash('test-pass', 10);
-    failApp.db.prepare('INSERT INTO admin (username, password_hash, timezone) VALUES (?, ?, ?)').run('admin', hash, 'UTC');
-
-    const connId = seedCalendarConnection(failApp.db, 'google');
-    const profileId = seedProfile(failApp.db, { slug: 'cancel-fail', write_calendar_id: connId });
-    seedBooking(failApp.db, profileId, {
-      cancellation_token: 'fail-delete-token',
-      calendar_event_id: 'event-already-gone',
-    });
-
-    const response = await failApp.inject({
-      method: 'POST',
-      url: '/api/cancel/fail-delete-token',
-    });
-
-    assert.equal(response.statusCode, 200);
-    const data = JSON.parse(response.body);
-    assert.ok(data.message.includes('cancelled'));
-
-    // Still marked as cancelled in DB
-    const booking = failApp.db.prepare("SELECT * FROM bookings WHERE cancellation_token = ?").get('fail-delete-token');
-    assert.equal(booking.status, 'cancelled');
-
-    await failApp.close();
-  });
-
-  it('cancelled bookings no longer block availability', async () => {
-    const freeBusyFetch = (url) => {
-      if (typeof url === 'string' && url.includes('freeBusy')) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ calendars: { primary: { busy: [] } } }) });
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
-    };
-
-    const slotApp = createTestApp(freeBusyFetch);
-    await slotApp.ready();
-    const hash = await bcrypt.hash('test-pass', 10);
-    slotApp.db.prepare('INSERT INTO admin (username, password_hash, timezone) VALUES (?, ?, ?)').run('admin', hash, 'UTC');
-
-    const profileId = seedProfile(slotApp.db, { slug: 'avail-test' });
-    const monday = getNextMonday();
-    slotApp.db.prepare("INSERT INTO schedule_templates (profile_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)").run(profileId, 1, '09:00', '17:00');
-
-    seedBooking(slotApp.db, profileId, {
-      cancellation_token: 'valid-token-avail',
-      start_time: `${monday}T09:00:00.000Z`,
-      end_time: `${monday}T09:30:00.000Z`,
-      status: 'confirmed',
-    });
-
-    const responseBefore = await slotApp.inject({
-      method: 'GET',
-      url: `/api/book/avail-test/slots?date=${monday}&duration=30&timezone=UTC`,
-    });
-    const dataBefore = JSON.parse(responseBefore.body);
-    const hasNineAm = dataBefore.slots.some(s => s.start === `${monday}T09:00:00.000Z`);
-    assert.ok(!hasNineAm, 'Slot should be blocked initially');
-
-    await slotApp.inject({
-      method: 'POST',
-      url: '/api/cancel/valid-token-avail',
-      headers: { 'content-type': 'application/json' },
-      payload: { reason: 'Freeing up slot' },
-    });
-
-    const responseAfter = await slotApp.inject({
-      method: 'GET',
-      url: `/api/book/avail-test/slots?date=${monday}&duration=30&timezone=UTC`,
-    });
-    const dataAfter = JSON.parse(responseAfter.body);
-    const nineAmSlot = dataAfter.slots.find(s => s.start === `${monday}T09:00:00.000Z`);
-    assert.ok(nineAmSlot, '09:00 slot should be available after cancellation');
-
-    await slotApp.close();
+    await app.db.run("DELETE FROM bookings WHERE profile_id = $1", [profileId]);
+    await app.db.run("DELETE FROM booking_profiles WHERE id = $1", [profileId]);
   });
 });

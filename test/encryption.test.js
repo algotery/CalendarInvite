@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { encrypt, decrypt } = require('../src/encryption');
 
 describe('Token encryption (AES-256-GCM)', () => {
-  const key = 'a'.repeat(64); // 32 bytes hex-encoded
+  const key = 'a'.repeat(64);
 
   it('encrypts and decrypts a token round-trip', () => {
     const plaintext = 'my-secret-oauth-token-12345';

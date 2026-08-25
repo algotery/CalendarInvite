@@ -4,37 +4,37 @@ const { encrypt } = require('../src/encryption');
 const { createDatabase } = require('../src/db');
 
 const TEST_ENCRYPTION_KEY = 'a'.repeat(64);
+const TEST_CONNECTION_STRING = process.env.TEST_DATABASE_URL || 'postgresql://postgres:postgres@localhost:5433/calendar_invite_test';
 
 describe('Microsoft Graph Utilities', () => {
   let db;
   let connectionId;
 
-  before(() => {
-    db = createDatabase(':memory:');
-    const result = db.prepare(`
-      INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      'microsoft',
-      encrypt('valid-access-token', TEST_ENCRYPTION_KEY),
-      encrypt('valid-refresh-token', TEST_ENCRYPTION_KEY),
-      new Date(Date.now() + 3600000).toISOString(),
-      'user@outlook.com',
-      'connected'
+  before(async () => {
+    db = await createDatabase(TEST_CONNECTION_STRING);
+    await db.run('DELETE FROM calendar_connections');
+    await db.run('DELETE FROM admin');
+    await db.run("INSERT INTO admin (email, username, password_hash, timezone) VALUES ($1, $2, $3, $4)", ['test@test.com', 'testuser', 'hash', 'UTC']);
+    const admin = await db.getOne("SELECT id FROM admin WHERE email = 'test@test.com'");
+    const result = await db.query(
+      `INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [admin.id, 'microsoft', encrypt('valid-access-token', TEST_ENCRYPTION_KEY), encrypt('valid-refresh-token', TEST_ENCRYPTION_KEY), new Date(Date.now() + 3600000).toISOString(), 'user@outlook.com', 'connected']
     );
-    connectionId = result.lastInsertRowid;
+    connectionId = result.rows[0].id;
   });
 
-  after(() => {
-    db.close();
+  after(async () => {
+    await db.run('DELETE FROM calendar_connections');
+    await db.run('DELETE FROM admin');
+    await db.close();
   });
 
   describe('token refresh', () => {
     it('refreshes expired token before making API calls', async () => {
       const { createMicrosoftClient } = require('../src/microsoft');
 
-      db.prepare('UPDATE calendar_connections SET token_expiry = ? WHERE id = ?')
-        .run(new Date(Date.now() - 60000).toISOString(), connectionId);
+      await db.run('UPDATE calendar_connections SET token_expiry = $1 WHERE id = $2', [new Date(Date.now() - 60000).toISOString(), connectionId]);
 
       const mockFetch = mock.fn(async (url, options) => {
         if (url.includes('/oauth2/v2.0/token')) {
@@ -66,18 +66,17 @@ describe('Microsoft Graph Utilities', () => {
 
       await client.getMicrosoftBusySlots(connectionId, '2024-01-01T00:00:00Z', '2024-01-02T00:00:00Z');
 
-      // Verify token was refreshed
       const tokenCall = mockFetch.mock.calls.find(c => c.arguments[0].includes('/oauth2/v2.0/token'));
       assert.ok(tokenCall, 'Should have called token endpoint for refresh');
 
       const { decrypt } = require('../src/encryption');
-      const conn = db.prepare('SELECT * FROM calendar_connections WHERE id = ?').get(connectionId);
+      const conn = await db.getOne('SELECT * FROM calendar_connections WHERE id = $1', [connectionId]);
       assert.equal(decrypt(conn.encrypted_access_token, TEST_ENCRYPTION_KEY), 'new-access-token');
       assert.equal(decrypt(conn.encrypted_refresh_token, TEST_ENCRYPTION_KEY), 'new-refresh-token');
 
       // Restore for next tests
-      db.prepare('UPDATE calendar_connections SET token_expiry = ?, encrypted_access_token = ?, encrypted_refresh_token = ? WHERE id = ?')
-        .run(new Date(Date.now() + 3600000).toISOString(), encrypt('valid-access-token', TEST_ENCRYPTION_KEY), encrypt('valid-refresh-token', TEST_ENCRYPTION_KEY), connectionId);
+      await db.run('UPDATE calendar_connections SET token_expiry = $1, encrypted_access_token = $2, encrypted_refresh_token = $3 WHERE id = $4',
+        [new Date(Date.now() + 3600000).toISOString(), encrypt('valid-access-token', TEST_ENCRYPTION_KEY), encrypt('valid-refresh-token', TEST_ENCRYPTION_KEY), connectionId]);
     });
   });
 

@@ -8,7 +8,7 @@ const SCHEMA_SQL = `
     password_hash TEXT NOT NULL,
     timezone TEXT NOT NULL DEFAULT 'UTC',
     notification_email TEXT DEFAULT '',
-    theme TEXT NOT NULL DEFAULT 'light'
+    theme TEXT NOT NULL DEFAULT 'system'
   );
 
   CREATE TABLE IF NOT EXISTS calendar_connections (
@@ -121,11 +121,12 @@ async function createDatabase(connectionString) {
 
   await pool.query(SCHEMA_SQL);
 
-  await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'light'`).catch(() => {});
+  await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'system'`).catch(() => {});
   await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS time_format TEXT NOT NULL DEFAULT '12h'`).catch(() => {});
   await pool.query(`ALTER TABLE admin ADD COLUMN IF NOT EXISTS onboarding_completed_at TEXT`).catch(() => {});
   await pool.query(`UPDATE admin SET onboarding_completed_at = NOW()::TEXT WHERE onboarding_completed_at IS NULL AND id IN (SELECT DISTINCT user_id FROM booking_profiles)`).catch(() => {});
   await pool.query(`ALTER TABLE booking_profiles ADD COLUMN IF NOT EXISTS allowed_durations TEXT NOT NULL DEFAULT '[30,45,60]'`).catch(() => {});
+  await pool.query(`ALTER TABLE booking_profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT`).catch(() => {});
 
   return {
     async query(text, params) {

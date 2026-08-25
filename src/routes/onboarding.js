@@ -1,5 +1,7 @@
 const { BASE_LAYOUT, escapeHtml } = require('../views/layout');
 
+const STATIC_URL = process.env.STATIC_ASSETS_URL || '';
+
 function registerOnboardingRoutes(app, opts = {}) {
   const googleClientId = opts.googleClientId || process.env.GOOGLE_CLIENT_ID;
   const googleConfigured = !!(googleClientId && (opts.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET) && (opts.googleRedirectUri || process.env.GOOGLE_REDIRECT_URI));
@@ -31,8 +33,8 @@ function registerOnboardingRoutes(app, opts = {}) {
       <div class="onboarding-page">
         <div class="onboarding-container">
           <div class="onboarding-header">
-            <img src="/img/icon.svg" alt="" class="onboarding-logo">
-            <h1 class="onboarding-title">Welcome to Lumi</h1>
+            <img src="${STATIC_URL}/img/icon.svg" alt="" class="onboarding-logo">
+            <h1 class="onboarding-title">Welcome to MeetsGo</h1>
             <p class="onboarding-subtitle">Let's get you set up in a few quick steps.</p>
           </div>
 

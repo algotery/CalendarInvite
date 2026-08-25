@@ -1,7 +1,15 @@
 const config = require('./config');
-const { buildApp } = require('./app');
 
 async function start() {
+  const { entryMode } = config;
+
+  if (entryMode === 'worker') {
+    const { startWorker } = require('./worker');
+    await startWorker();
+    return;
+  }
+
+  const { buildApp } = require('./app');
   const app = await buildApp({ logger: true });
 
   app.listen({ port: config.port, host: config.host }, (err) => {
@@ -11,15 +19,18 @@ async function start() {
     }
   });
 
-  process.on('SIGTERM', async () => {
-    await app.close();
-    process.exit(0);
-  });
+  if (entryMode === 'all') {
+    const { startWorker } = require('./worker');
+    await startWorker();
+  }
 
-  process.on('SIGINT', async () => {
+  const shutdown = async () => {
     await app.close();
     process.exit(0);
-  });
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 start();

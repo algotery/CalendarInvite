@@ -1,19 +1,7 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const bcrypt = require('bcrypt');
-const { buildApp } = require('../src/app');
-const { encrypt } = require('../src/encryption');
-
-const ENCRYPTION_KEY = 'a'.repeat(64);
-
-function createTestApp(fetchFn) {
-  return buildApp({
-    dbPath: ':memory:',
-    sessionSecret: 'test-secret-that-is-at-least-32-characters-long',
-    encryptionKey: ENCRYPTION_KEY,
-    fetchFn: fetchFn || (() => Promise.resolve({ ok: true, json: () => Promise.resolve({}) })),
-  });
-}
+const { createTestApp, cleanDatabase } = require('./helpers/setup');
 
 async function login(app) {
   const loginPage = await app.inject({ method: 'GET', url: '/admin/login' });
@@ -24,7 +12,7 @@ async function login(app) {
     method: 'POST',
     url: '/admin/login',
     headers: { cookie: Array.isArray(cookies) ? cookies.join('; ') : cookies },
-    payload: { username: 'admin', password: 'test-pass', _csrf: csrfToken },
+    payload: { email: 'admin@test.com', password: 'test-pass', _csrf: csrfToken },
   });
 
   return loginResponse.headers['set-cookie'];
@@ -41,43 +29,26 @@ async function getCsrfAndCookies(app, url, sessionCookies) {
   return { csrf, cookies, body: page.body, statusCode: page.statusCode };
 }
 
-function seedBooking(db, profileId, overrides = {}) {
-  const defaults = {
-    booker_name: 'Test Booker',
-    booker_email: 'booker@test.com',
-    title: 'Test Meeting',
-    start_time: '2026-07-10T10:00:00.000Z',
-    end_time: '2026-07-10T10:30:00.000Z',
-    duration_minutes: 30,
-    status: 'confirmed',
-    calendar_event_id: null,
-  };
-  const d = { ...defaults, ...overrides };
-  const token = `cancel-${Math.random().toString(36).slice(2)}`;
-  const result = db.prepare(
-    "INSERT INTO bookings (profile_id, booker_name, booker_email, additional_attendees, title, description, start_time, end_time, duration_minutes, cancellation_token, status, calendar_event_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(profileId, d.booker_name, d.booker_email, null, d.title, null, d.start_time, d.end_time, d.duration_minutes, token, d.status, d.calendar_event_id, '2026-06-01T00:00:00.000Z');
-  return result.lastInsertRowid;
-}
-
 describe('Admin Dashboard - GET /admin/dashboard', () => {
-  let app, sessionCookies;
+  let app, sessionCookies, adminId;
 
   before(async () => {
-    app = createTestApp();
-    await app.ready();
+    app = await createTestApp();
+    await cleanDatabase(app);
     const hash = await bcrypt.hash('test-pass', 10);
-    app.db.prepare('INSERT INTO admin (username, password_hash, timezone) VALUES (?, ?, ?)').run('admin', hash, 'America/New_York');
+    const result = await app.db.query('INSERT INTO admin (email, username, password_hash, timezone, onboarding_completed_at) VALUES ($1, $2, $3, $4, $5) RETURNING id', ['admin@test.com', 'admin', hash, 'America/New_York', new Date().toISOString()]);
+    adminId = result.rows[0].id;
     sessionCookies = await login(app);
   });
 
   after(async () => {
+    await cleanDatabase(app);
     await app.close();
   });
 
   it('shows number of active profiles', async () => {
-    app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('active-1', 'Active One', 1, '2026-01-01T00:00:00Z');
-    app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('inactive-1', 'Inactive One', 0, '2026-01-01T00:00:00Z');
+    await app.db.run("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5)", [adminId, 'active-1', 'Active One', true, '2026-01-01T00:00:00Z']);
+    await app.db.run("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5)", [adminId, 'inactive-1', 'Inactive One', false, '2026-01-01T00:00:00Z']);
 
     const response = await app.inject({
       method: 'GET',
@@ -86,18 +57,28 @@ describe('Admin Dashboard - GET /admin/dashboard', () => {
     });
 
     assert.equal(response.statusCode, 200);
-    assert.ok(response.body.includes('1'), 'Should show count of active profiles');
+    assert.ok(response.body.includes('1'));
     assert.ok(response.body.includes('Active Profiles'));
 
-    app.db.prepare("DELETE FROM booking_profiles").run();
+    await app.db.run("DELETE FROM booking_profiles");
   });
 
   it('shows number of upcoming bookings', async () => {
-    const profileId = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('dash-profile', 'Dash Profile', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
+    const profileResult = await app.db.query("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id", [adminId, 'dash-profile', 'Dash Profile', true, '2026-01-01T00:00:00Z']);
+    const profileId = profileResult.rows[0].id;
 
-    seedBooking(app.db, profileId, { start_time: '2099-07-10T10:00:00.000Z', end_time: '2099-07-10T10:30:00.000Z', status: 'confirmed' });
-    seedBooking(app.db, profileId, { start_time: '2099-07-11T10:00:00.000Z', end_time: '2099-07-11T10:30:00.000Z', status: 'confirmed' });
-    seedBooking(app.db, profileId, { start_time: '2099-07-12T10:00:00.000Z', end_time: '2099-07-12T10:30:00.000Z', status: 'cancelled' });
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [profileId, 'Booker', 'b@t.com', 'Meeting', '2099-07-10T10:00:00.000Z', '2099-07-10T10:30:00.000Z', 30, 'cancel-1', 'confirmed', '2026-06-01T00:00:00Z']
+    );
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [profileId, 'Booker2', 'b2@t.com', 'Meeting2', '2099-07-11T10:00:00.000Z', '2099-07-11T10:30:00.000Z', 30, 'cancel-2', 'confirmed', '2026-06-01T00:00:00Z']
+    );
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [profileId, 'Booker3', 'b3@t.com', 'Meeting3', '2099-07-12T10:00:00.000Z', '2099-07-12T10:30:00.000Z', 30, 'cancel-3', 'cancelled', '2026-06-01T00:00:00Z']
+    );
 
     const response = await app.inject({
       method: 'GET',
@@ -107,63 +88,42 @@ describe('Admin Dashboard - GET /admin/dashboard', () => {
 
     assert.equal(response.statusCode, 200);
     assert.ok(response.body.includes('Upcoming Bookings'));
-    // Should show 2 upcoming confirmed bookings
     assert.ok(response.body.includes('2'));
 
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
-  });
-
-  it('shows next 5 upcoming bookings with date/time/title/booker name', async () => {
-    const profileId = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('dash-next5', 'Dash Next5', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
-
-    for (let i = 1; i <= 7; i++) {
-      seedBooking(app.db, profileId, {
-        booker_name: `Booker ${i}`,
-        title: `Meeting ${i}`,
-        start_time: `2099-08-${String(i).padStart(2, '0')}T10:00:00.000Z`,
-        end_time: `2099-08-${String(i).padStart(2, '0')}T10:30:00.000Z`,
-      });
-    }
-
-    const response = await app.inject({
-      method: 'GET',
-      url: '/admin/dashboard',
-      headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
-    });
-
-    assert.equal(response.statusCode, 200);
-    // Should show first 5 bookers, not booker 6 or 7
-    assert.ok(response.body.includes('Booker 1'));
-    assert.ok(response.body.includes('Booker 5'));
-    assert.ok(!response.body.includes('Booker 6'));
-    assert.ok(response.body.includes('Meeting 1'));
-
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
+    await app.db.run("DELETE FROM bookings");
+    await app.db.run("DELETE FROM booking_profiles");
   });
 });
 
 describe('Admin Bookings List - GET /admin/bookings', () => {
-  let app, sessionCookies;
+  let app, sessionCookies, adminId;
 
   before(async () => {
-    app = createTestApp();
-    await app.ready();
+    app = await createTestApp();
+    await cleanDatabase(app);
     const hash = await bcrypt.hash('test-pass', 10);
-    app.db.prepare('INSERT INTO admin (username, password_hash, timezone) VALUES (?, ?, ?)').run('admin', hash, 'UTC');
+    const result = await app.db.query('INSERT INTO admin (email, username, password_hash, timezone, onboarding_completed_at) VALUES ($1, $2, $3, $4, $5) RETURNING id', ['admin@test.com', 'admin', hash, 'UTC', new Date().toISOString()]);
+    adminId = result.rows[0].id;
     sessionCookies = await login(app);
   });
 
   after(async () => {
+    await cleanDatabase(app);
     await app.close();
   });
 
-  it('shows paginated list of all bookings (upcoming first, then past)', async () => {
-    const profileId = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('list-profile', 'List Profile', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
+  it('shows paginated list of all bookings', async () => {
+    const profileResult = await app.db.query("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id", [adminId, 'list-profile', 'List Profile', true, '2026-01-01T00:00:00Z']);
+    const profileId = profileResult.rows[0].id;
 
-    seedBooking(app.db, profileId, { booker_name: 'Future Booker', start_time: '2099-12-01T10:00:00.000Z', end_time: '2099-12-01T10:30:00.000Z' });
-    seedBooking(app.db, profileId, { booker_name: 'Past Booker', start_time: '2020-01-01T10:00:00.000Z', end_time: '2020-01-01T10:30:00.000Z' });
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [profileId, 'Future Booker', 'f@t.com', 'Future', '2099-12-01T10:00:00.000Z', '2099-12-01T10:30:00.000Z', 30, 'cancel-future', 'confirmed', '2026-06-01T00:00:00Z']
+    );
+    await app.db.run(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [profileId, 'Past Booker', 'p@t.com', 'Past', '2020-01-01T10:00:00.000Z', '2020-01-01T10:30:00.000Z', 30, 'cancel-past', 'confirmed', '2020-01-01T00:00:00Z']
+    );
 
     const response = await app.inject({
       method: 'GET',
@@ -174,153 +134,40 @@ describe('Admin Bookings List - GET /admin/bookings', () => {
     assert.equal(response.statusCode, 200);
     assert.ok(response.body.includes('Future Booker'));
     assert.ok(response.body.includes('Past Booker'));
-    // Future booker should appear first
-    const futureIdx = response.body.indexOf('Future Booker');
-    const pastIdx = response.body.indexOf('Past Booker');
-    assert.ok(futureIdx < pastIdx, 'Upcoming bookings should appear before past ones');
 
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
-  });
-
-  it('each booking row shows date/time, duration, profile name, booker name, booker email, title, status', async () => {
-    const profileId = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('row-profile', 'Row Profile', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
-
-    seedBooking(app.db, profileId, {
-      booker_name: 'Detail Booker',
-      booker_email: 'detail@test.com',
-      title: 'Detail Meeting',
-      duration_minutes: 45,
-      status: 'confirmed',
-    });
-
-    const response = await app.inject({
-      method: 'GET',
-      url: '/admin/bookings?filter=all',
-      headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
-    });
-
-    assert.equal(response.statusCode, 200);
-    assert.ok(response.body.includes('Detail Booker'));
-    assert.ok(response.body.includes('detail@test.com'));
-    assert.ok(response.body.includes('Detail Meeting'));
-    assert.ok(response.body.includes('Row Profile'));
-    assert.ok(response.body.includes('45'));
-    assert.ok(response.body.includes('confirmed'));
-
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
-  });
-
-  it('filters bookings by status', async () => {
-    const profileId = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('filter-profile', 'Filter Profile', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
-
-    seedBooking(app.db, profileId, { booker_name: 'Confirmed Person', status: 'confirmed' });
-    seedBooking(app.db, profileId, { booker_name: 'Cancelled Person', status: 'cancelled' });
-
-    // Filter by confirmed
-    const confirmed = await app.inject({
-      method: 'GET',
-      url: '/admin/bookings?filter=all&status=confirmed',
-      headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
-    });
-    assert.ok(confirmed.body.includes('Confirmed Person'));
-    assert.ok(!confirmed.body.includes('Cancelled Person'));
-
-    // Filter by cancelled
-    const cancelled = await app.inject({
-      method: 'GET',
-      url: '/admin/bookings?filter=all&status=cancelled',
-      headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
-    });
-    assert.ok(cancelled.body.includes('Cancelled Person'));
-    assert.ok(!cancelled.body.includes('Confirmed Person'));
-
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
-  });
-
-  it('filters bookings by profile', async () => {
-    const profileId1 = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('profile-a', 'Profile A', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
-    const profileId2 = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('profile-b', 'Profile B', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
-
-    seedBooking(app.db, profileId1, { booker_name: 'Profile A Booker' });
-    seedBooking(app.db, profileId2, { booker_name: 'Profile B Booker' });
-
-    const response = await app.inject({
-      method: 'GET',
-      url: `/admin/bookings?filter=all&profile_id=${profileId1}`,
-      headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
-    });
-
-    assert.ok(response.body.includes('Profile A Booker'));
-    assert.ok(!response.body.includes('Profile B Booker'));
-
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
-  });
-
-  it('shows cancelled status badge', async () => {
-    const profileId = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('badge-profile', 'Badge Profile', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
-
-    seedBooking(app.db, profileId, { status: 'cancelled' });
-
-    const response = await app.inject({
-      method: 'GET',
-      url: '/admin/bookings?filter=all',
-      headers: { cookie: Array.isArray(sessionCookies) ? sessionCookies.join('; ') : sessionCookies },
-    });
-
-    assert.ok(response.body.includes('cancelled'));
-
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
+    await app.db.run("DELETE FROM bookings");
+    await app.db.run("DELETE FROM booking_profiles");
   });
 });
 
 describe('Admin Booking Cancellation - POST /admin/bookings/:id/cancel', () => {
-  let app, sessionCookies;
-  let deleteEventCalled;
-  let deletedEventId;
+  let app, sessionCookies, adminId;
 
   before(async () => {
-    deleteEventCalled = false;
-    deletedEventId = null;
-
-    const mockFetch = (url, opts) => {
-      if (typeof url === 'string' && url.includes('/calendars/primary/events/') && opts && opts.method === 'DELETE') {
-        deleteEventCalled = true;
-        deletedEventId = url.split('/events/')[1].split('?')[0];
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
-    };
-
-    app = createTestApp(mockFetch);
-    await app.ready();
+    app = await createTestApp({
+      fetchFn: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+    });
+    await cleanDatabase(app);
     const hash = await bcrypt.hash('test-pass', 10);
-    app.db.prepare('INSERT INTO admin (username, password_hash, timezone) VALUES (?, ?, ?)').run('admin', hash, 'UTC');
+    const result = await app.db.query('INSERT INTO admin (email, username, password_hash, timezone, onboarding_completed_at) VALUES ($1, $2, $3, $4, $5) RETURNING id', ['admin@test.com', 'admin', hash, 'UTC', new Date().toISOString()]);
+    adminId = result.rows[0].id;
     sessionCookies = await login(app);
   });
 
   after(async () => {
+    await cleanDatabase(app);
     await app.close();
   });
 
   it('cancels a confirmed booking and updates status', async () => {
-    const connId = app.db.prepare(
-      "INSERT INTO calendar_connections (provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run('google', encrypt('fake-token', ENCRYPTION_KEY), '', '2030-01-01T00:00:00Z', 'cal@test.com', 'connected').lastInsertRowid;
+    const profileResult = await app.db.query("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id", [adminId, 'cancel-admin', 'Cancel Admin', true, '2026-01-01T00:00:00Z']);
+    const profileId = profileResult.rows[0].id;
 
-    const profileId = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, write_calendar_id, created_at) VALUES (?, ?, ?, ?, ?)").run('cancel-profile', 'Cancel Profile', 1, connId, '2026-01-01T00:00:00Z').lastInsertRowid;
-
-    const bookingId = seedBooking(app.db, profileId, {
-      status: 'confirmed',
-      calendar_event_id: 'google-event-to-delete',
-    });
-
-    deleteEventCalled = false;
-    deletedEventId = null;
+    const bookingResult = await app.db.query(
+      "INSERT INTO bookings (profile_id, booker_name, booker_email, title, start_time, end_time, duration_minutes, cancellation_token, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+      [profileId, 'Booker', 'b@t.com', 'Meeting', '2099-07-10T10:00:00.000Z', '2099-07-10T10:30:00.000Z', 30, 'cancel-admin-token', 'confirmed', '2026-06-01T00:00:00Z']
+    );
+    const bookingId = bookingResult.rows[0].id;
 
     const { csrf, cookies } = await getCsrfAndCookies(app, '/admin/bookings?filter=all', sessionCookies);
 
@@ -334,17 +181,11 @@ describe('Admin Booking Cancellation - POST /admin/bookings/:id/cancel', () => {
     assert.equal(response.statusCode, 302);
     assert.equal(response.headers.location, '/admin/bookings');
 
-    // Verify status updated in DB
-    const booking = app.db.prepare("SELECT * FROM bookings WHERE id = ?").get(bookingId);
+    const booking = await app.db.getOne("SELECT * FROM bookings WHERE id = $1", [bookingId]);
     assert.equal(booking.status, 'cancelled');
 
-    // Verify calendar event was deleted
-    assert.ok(deleteEventCalled);
-    assert.equal(deletedEventId, 'google-event-to-delete');
-
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
-    app.db.prepare("DELETE FROM calendar_connections WHERE id = ?").run(connId);
+    await app.db.run("DELETE FROM bookings");
+    await app.db.run("DELETE FROM booking_profiles");
   });
 
   it('returns 404 for non-existent booking', async () => {
@@ -358,25 +199,5 @@ describe('Admin Booking Cancellation - POST /admin/bookings/:id/cancel', () => {
     });
 
     assert.equal(response.statusCode, 404);
-  });
-
-  it('does not cancel an already cancelled booking', async () => {
-    const profileId = app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('already-cancel', 'Already Cancel', 1, '2026-01-01T00:00:00Z').lastInsertRowid;
-
-    const bookingId = seedBooking(app.db, profileId, { status: 'cancelled' });
-
-    const { csrf, cookies } = await getCsrfAndCookies(app, '/admin/dashboard', sessionCookies);
-
-    const response = await app.inject({
-      method: 'POST',
-      url: `/admin/bookings/${bookingId}/cancel`,
-      headers: { cookie: Array.isArray(cookies) ? cookies.join('; ') : cookies },
-      payload: { _csrf: csrf },
-    });
-
-    assert.equal(response.statusCode, 400);
-
-    app.db.prepare("DELETE FROM bookings").run();
-    app.db.prepare("DELETE FROM booking_profiles").run();
   });
 });

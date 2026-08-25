@@ -12,19 +12,19 @@ const TIMEZONES = [
   'Africa/Cairo', 'Africa/Johannesburg', 'Africa/Lagos',
 ];
 
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+const { escapeHtml } = require('../utils/html');
+
+const STATIC_URL = process.env.STATIC_ASSETS_URL || '';
 
 const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage = false) => {
   const bodyClass = isBookingPage ? ' class="booking-page"' : '';
   const content = isAdmin ? `
 <div class="app-layout">
   <aside class="sidebar">
-    <div class="sidebar-header">
-      <img src="/img/icon.svg" alt="" class="sidebar-logo-icon">
-      <img src="/img/wordmark.svg" alt="Logo" class="sidebar-logo-wordmark">
-    </div>
+    <a href="/admin/dashboard" class="sidebar-header">
+      <img src="${STATIC_URL}/img/icon.svg" alt="" class="sidebar-logo-icon">
+      <img src="${STATIC_URL}/img/wordmark.svg" alt="Logo" class="sidebar-logo-wordmark">
+    </a>
     <div class="sidebar-create">
       <a href="/admin/profiles/new" class="profile-overlay-trigger" data-url="/admin/profiles/new?partial=1"><i class="ph ph-plus"></i> Create</a>
     </div>
@@ -59,14 +59,14 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
   <meta charset="utf-8">
   ${isBookingPage ? '<meta name="booking-page" content="1">' : ''}
   <script>
-    (function(){var isBooking=document.querySelector('meta[name="booking-page"]');var key=isBooking?'booking-theme':'theme';var t=localStorage.getItem(key);if(t==='dark')document.documentElement.setAttribute('data-theme','dark');})();
+    (function(){var isBooking=document.querySelector('meta[name="booking-page"]');var key=isBooking?'booking-theme':'theme';var t=localStorage.getItem(key);if(t==='dark')document.documentElement.setAttribute('data-theme','dark');else if(t==='light')document.documentElement.setAttribute('data-theme','light');else{var d=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',d);}})();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${title} - Lumi</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>${title} - MeetsGo</title>
+  <link rel="icon" type="image/svg+xml" href="${STATIC_URL}/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="${STATIC_URL}/css/styles.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" media="print" onload="this.media='all'">
   <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css" media="print" onload="this.media='all'">
@@ -312,6 +312,7 @@ const BASE_LAYOUT = (title, body, isAdmin = false, activeNav = '', isBookingPage
           }).then(function(res) { return res.json().then(function(data) { return { status: res.status, data: data }; }); })
             .then(function(result) {
               btn.disabled = false;
+              if (result.data.theme) { localStorage.setItem('theme', result.data.theme); }
               if (result.data.redirect) { window.location.href = result.data.redirect; return; }
               if (result.data.error) { Toast.show(result.data.error, 'error'); }
             }).catch(function() { btn.disabled = false; Toast.show('Something went wrong. Please try again.', 'error'); });

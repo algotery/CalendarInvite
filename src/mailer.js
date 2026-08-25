@@ -10,20 +10,30 @@ function getTransporter() {
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
 
-  if (!host || !user || !pass) return null;
+  if (host && user && pass) {
+    transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+    });
+    return transporter;
+  }
 
-  transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
+  if (process.env.AWS_SES_FROM_EMAIL || process.env.AWS_REGION) {
+    const { SES, SendRawEmailCommand } = require('@aws-sdk/client-ses');
+    const ses = new SES({ region: process.env.AWS_REGION || 'eu-central-1' });
+    transporter = nodemailer.createTransport({
+      SES: { ses, aws: { SendRawEmailCommand } },
+    });
+    return transporter;
+  }
 
-  return transporter;
+  return null;
 }
 
 function getFromAddress() {
-  return process.env.SMTP_FROM || process.env.SMTP_USER;
+  return process.env.SMTP_FROM || process.env.AWS_SES_FROM_EMAIL || process.env.SMTP_USER;
 }
 
 async function sendNewBookingNotification(adminEmail, booking, profileName, cancelUrl, adminTimezone) {
@@ -69,7 +79,7 @@ async function sendNewBookingNotification(adminEmail, booking, profileName, canc
             <a href="${cancelUrl}" style="display: inline-block; padding: 12px 28px; background: #dc2626; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px; font-weight: 500;">Cancel This Booking</a>
           </div>
           <p style="margin: 24px 0 0; color: #9e9e9e; font-size: 12px; text-align: center;">
-            This is an automated notification from Lumi.
+            This is an automated notification from MeetsGo.
           </p>
         </div>
       </div>
@@ -77,7 +87,7 @@ async function sendNewBookingNotification(adminEmail, booking, profileName, canc
   `;
 
   await t.sendMail({
-    from: `Lumi <${getFromAddress()}>`,
+    from: `MeetsGo <${getFromAddress()}>`,
     to: adminEmail,
     subject: `New booking: ${booking.title} - ${dateStr}`,
     html,
@@ -123,7 +133,7 @@ async function sendBookingCancelledNotification(bookerEmail, booking, profileNam
             If you'd like to schedule a new meeting, please visit the booking page.
           </p>
           <p style="margin: 24px 0 0; color: #9e9e9e; font-size: 12px; text-align: center;">
-            This is an automated notification from Lumi.
+            This is an automated notification from MeetsGo.
           </p>
         </div>
       </div>
@@ -131,7 +141,7 @@ async function sendBookingCancelledNotification(bookerEmail, booking, profileNam
   `;
 
   await t.sendMail({
-    from: `Lumi <${getFromAddress()}>`,
+    from: `MeetsGo <${getFromAddress()}>`,
     to: bookerEmail,
     subject: `Booking cancelled: ${booking.title} - ${dateStr}`,
     html,

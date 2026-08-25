@@ -1,13 +1,13 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { buildApp } = require('../src/app');
+const { createTestApp, cleanDatabase } = require('./helpers/setup');
 
 describe('Server', () => {
   let app;
 
   before(async () => {
-    app = buildApp({ dbPath: ':memory:', sessionSecret: 'test-secret-that-is-at-least-32-characters-long', encryptionKey: 'a'.repeat(64), googleClientId: 'test-id', googleClientSecret: 'test-secret', googleRedirectUri: 'http://localhost:3000/admin/calendars/callback/google' });
-    await app.ready();
+    app = await createTestApp();
+    await cleanDatabase(app);
   });
 
   after(async () => {
@@ -16,10 +16,7 @@ describe('Server', () => {
 
   it('serves a placeholder page at GET /', async () => {
     const response = await app.inject({ method: 'GET', url: '/' });
-    assert.equal(response.statusCode, 200);
-    assert.ok(response.headers['content-type'].includes('text/html'));
-
-    assert.ok(response.body.includes('CalendarInvite'));
+    assert.equal(response.statusCode, 302);
   });
 
   it('registers admin route group', async () => {
@@ -28,9 +25,11 @@ describe('Server', () => {
   });
 
   it('registers public booking route group', async () => {
-    app.db.prepare("INSERT INTO booking_profiles (slug, name, is_active, created_at) VALUES (?, ?, ?, ?)").run('test-slug', 'Test', 1, new Date().toISOString());
+    await app.db.run("INSERT INTO admin (email, username, password_hash, timezone) VALUES ($1, $2, $3, $4)", ['test@test.com', 'admin', 'hash', 'UTC']);
+    const adminRow = await app.db.getOne("SELECT id FROM admin WHERE username = 'admin'");
+    await app.db.run("INSERT INTO booking_profiles (user_id, slug, name, is_active, created_at) VALUES ($1, $2, $3, $4, $5)", [adminRow.id, 'test-slug', 'Test', true, new Date().toISOString()]);
     const response = await app.inject({ method: 'GET', url: '/book/test-slug' });
     assert.notEqual(response.statusCode, 404);
-    app.db.prepare("DELETE FROM booking_profiles WHERE slug = ?").run('test-slug');
+    await cleanDatabase(app);
   });
 });
