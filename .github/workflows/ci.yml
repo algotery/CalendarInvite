@@ -36,7 +36,7 @@ jobs:
     # İleride [20, 22] yaparak iki versiyonda test edebilirsin.
     strategy:
       matrix:
-        node-version: [20]
+        node-version: [22]
 
     steps:
       # ─── 1. Kodu çek ────────────────────────────────────────────────
