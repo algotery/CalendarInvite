@@ -12,6 +12,7 @@ function registerCalendarsRoutes(app, opts) {
   const zohoClientId = opts.zohoClientId;
   const zohoClientSecret = opts.zohoClientSecret;
   const zohoRedirectUri = opts.zohoRedirectUri;
+  const zohoAccountsServer = opts.zohoAccountsServer || 'https://accounts.zoho.com';
 
   app.get('/calendars', async (request, reply) => {
     const adminId = request.session.get('adminId');
@@ -59,7 +60,7 @@ function registerCalendarsRoutes(app, opts) {
       ? `<details><summary>Some providers are not configured</summary><p>Add the following to your <code>.env</code> file:</p><ul>${missingVars.map(v => `<li>${v}</li>`).join('')}</ul></details>`
       : '';
 
-    reply.type('text/html').send(BASE_LAYOUT('Calendar Connections', `
+    return reply.type('text/html').send(BASE_LAYOUT('Calendar Connections', `
       <div class="calendars-page">
         <div class="calendars-header">
           <h1>Calendar Connections</h1>
@@ -341,11 +342,11 @@ function registerCalendarsRoutes(app, opts) {
       client_id: zohoClientId,
       redirect_uri: zohoRedirectUri,
       response_type: 'code',
-      scope: 'ZohoCalendar.calendar.ALL,ZohoCalendar.event.ALL,ZohoCalendar.freebusy.READ',
+      scope: 'ZohoCalendar.calendar.ALL,ZohoCalendar.event.ALL,ZohoCalendar.freebusy.READ,AaaServer.profile.READ',
       access_type: 'offline',
       prompt: 'consent',
     });
-    return reply.redirect(`https://accounts.zoho.com/oauth/v2/auth?${params}`);
+    return reply.redirect(`${zohoAccountsServer}/oauth/v2/auth?${params}`);
   });
 
   app.get('/calendars/zoho/callback', async (request, reply) => {
@@ -354,6 +355,7 @@ function registerCalendarsRoutes(app, opts) {
       return reply.status(400).send('Missing authorization code');
     }
 
+    const accountsServer = request.query['accounts-server'] || 'https://accounts.zoho.com';
     const fetchFn = app.zohoFetch || globalThis.fetch;
 
     const tokenParams = new URLSearchParams({
@@ -364,7 +366,7 @@ function registerCalendarsRoutes(app, opts) {
       code,
     });
 
-    const tokenResponse = await fetchFn(`https://accounts.zoho.com/oauth/v2/token?${tokenParams}`, {
+    const tokenResponse = await fetchFn(`${accountsServer}/oauth/v2/token?${tokenParams}`, {
       method: 'POST',
     });
 
@@ -373,13 +375,21 @@ function registerCalendarsRoutes(app, opts) {
     }
 
     const tokenData = await tokenResponse.json();
-    const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
+    const expiresIn = tokenData.expires_in || 3600;
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-    const userResponse = await fetchFn('https://accounts.zoho.com/oauth/user/info', {
-      headers: { Authorization: `Zoho-oauthtoken ${tokenData.access_token}` },
-    });
-    const userData = await userResponse.json();
-    const email = userData.Email || '';
+    let email = '';
+    try {
+      const userResponse = await fetchFn(`${accountsServer}/oauth/user/info`, {
+        headers: { Authorization: `Zoho-oauthtoken ${tokenData.access_token}` },
+      });
+      if (userResponse.ok) {
+        const userData = await userResponse.json();
+        email = userData.Email || userData.email || userData.DISPLAY_NAME || '';
+      }
+    } catch (e) {
+      // user info is best-effort
+    }
 
     const encryptedAccess = encrypt(tokenData.access_token, encryptionKey);
     const encryptedRefresh = encrypt(tokenData.refresh_token, encryptionKey);
@@ -396,13 +406,13 @@ function registerCalendarsRoutes(app, opts) {
 
     if (zohoExisting) {
       await app.db.run(
-        'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4 WHERE id = $5',
-        [encryptedAccess, encryptedRefresh, expiresAt, 'connected', zohoExisting.id]
+        'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4, accounts_server = $5 WHERE id = $6',
+        [encryptedAccess, encryptedRefresh, expiresAt, 'connected', accountsServer, zohoExisting.id]
       );
     } else {
       await app.db.run(
-        'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [userId, 'zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected']
+        'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status, accounts_server) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [userId, 'zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected', accountsServer]
       );
     }
 

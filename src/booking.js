@@ -684,9 +684,26 @@ function registerBusynessApi(app, { encryptionKey }) {
           const response = await fetchWithTimeout(app.fetchFn, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ schedules: [cal.email], startTime: { dateTime: rangeMin, timeZone: 'UTC' }, endTime: { dateTime: rangeMax, timeZone: 'UTC' } }) });
           if (response.ok) { const data = await response.json(); return (data.value?.[0]?.scheduleItems || []).map(item => ({ start: item.start.dateTime, end: item.end.dateTime })); }
         } else if (cal.provider === 'zoho') {
-          const params = new URLSearchParams({ stime: rangeMin, etime: rangeMax });
-          const response = await fetchWithTimeout(app.fetchFn, `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
-          if (response.ok) { const data = await response.json(); return (data.fb_data || []).filter(s => s.fbtype === 'busy').map(s => ({ start: s.s_datetime, end: s.e_datetime })); }
+          const zohoDomain = (cal.accounts_server || 'https://accounts.zoho.com').replace('https://accounts.', '');
+          const zohoCalBase = `https://calendar.${zohoDomain}`;
+          const calListRes = await fetchWithTimeout(app.fetchFn, `${zohoCalBase}/api/v1/calendars`, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+          if (!calListRes.ok) return [];
+          const calListData = await calListRes.json();
+          const primaryCal = calListData.calendars?.find(c => c.isdefault) || calListData.calendars?.[0];
+          if (!primaryCal) return [];
+          const calUid = primaryCal.uid;
+          const zohoStart = firstDate.replace(/-/g, '');
+          const zohoEnd = lastDate.replace(/-/g, '');
+          const params = new URLSearchParams({ range: JSON.stringify({ start: zohoStart, end: zohoEnd }) });
+          const eventsRes = await fetchWithTimeout(app.fetchFn, `${zohoCalBase}/api/v1/calendars/${calUid}/events?${params}`, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+          if (eventsRes.ok) {
+            const eventsData = await eventsRes.json();
+            return (eventsData.events || []).map(ev => {
+              const startIso = (ev.dateandtime?.start || '').replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6');
+              const endIso = (ev.dateandtime?.end || '').replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6');
+              return { start: startIso, end: endIso };
+            });
+          }
         }
         return [];
       }));

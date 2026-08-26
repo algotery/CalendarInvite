@@ -40,6 +40,7 @@ async function buildApp(opts = {}) {
   const zohoClientId = opts.zohoClientId || process.env.ZOHO_CLIENT_ID;
   const zohoClientSecret = opts.zohoClientSecret || process.env.ZOHO_CLIENT_SECRET;
   const zohoRedirectUri = opts.zohoRedirectUri || process.env.ZOHO_REDIRECT_URI;
+  const zohoAccountsServer = opts.zohoAccountsServer || process.env.ZOHO_ACCOUNTS_SERVER || 'https://accounts.zoho.com';
 
   app.decorate('db', db);
   app.decorate('fetchFn', opts.fetchFn || globalThis.fetch);
@@ -110,7 +111,7 @@ async function buildApp(opts = {}) {
     registerOnboardingRoutes(app, opts);
     registerDashboardRoutes(app);
     registerBookingsRoutes(app, { encryptionKey });
-    registerCalendarsRoutes(app, { ...opts, encryptionKey, googleClientId, googleClientSecret, googleRedirectUri, zohoClientId, zohoClientSecret, zohoRedirectUri });
+    registerCalendarsRoutes(app, { ...opts, encryptionKey, googleClientId, googleClientSecret, googleRedirectUri, zohoClientId, zohoClientSecret, zohoRedirectUri, zohoAccountsServer });
     registerProfileRoutes(app);
     registerSettingsRoutes(app);
   }, { prefix: '/admin' });

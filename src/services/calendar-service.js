@@ -87,17 +87,26 @@ async function getCalendarBusySlots(db, encryptionKey, profileId, dateStr, fetch
         })));
       }
     } else if (cal.provider === 'zoho') {
-      const params = new URLSearchParams({ stime: timeMin, etime: timeMax });
-      const response = await fetchWithTimeout(fetchFn, `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`, {
-        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const fbData = data.fb_data || [];
-        busy.push(...fbData.filter(s => s.fbtype === 'busy').map(s => ({
-          start: s.s_datetime,
-          end: s.e_datetime,
-        })));
+      const zohoDomain = (cal.accounts_server || 'https://accounts.zoho.com').replace('https://accounts.', '');
+      const zohoCalBase = `https://calendar.${zohoDomain}`;
+      const calListRes = await fetchWithTimeout(fetchFn, `${zohoCalBase}/api/v1/calendars`, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+      if (calListRes.ok) {
+        const calListData = await calListRes.json();
+        const primaryCal = calListData.calendars?.find(c => c.isdefault) || calListData.calendars?.[0];
+        if (primaryCal) {
+          const zohoStart = timeMin.split('T')[0].replace(/-/g, '');
+          const zohoEnd = timeMax.split('T')[0].replace(/-/g, '');
+          const params = new URLSearchParams({ range: JSON.stringify({ start: zohoStart, end: zohoEnd }) });
+          const eventsRes = await fetchWithTimeout(fetchFn, `${zohoCalBase}/api/v1/calendars/${primaryCal.uid}/events?${params}`, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+          if (eventsRes.ok) {
+            const eventsData = await eventsRes.json();
+            busy.push(...(eventsData.events || []).map(ev => {
+              const startIso = (ev.dateandtime?.start || '').replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6');
+              const endIso = (ev.dateandtime?.end || '').replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6');
+              return { start: startIso, end: endIso };
+            }));
+          }
+        }
       }
     }
 
@@ -129,14 +138,16 @@ async function createCalendarEvent(fetchFn, db, encryptionKey, connection, event
     const data = await response.json();
     return data.id;
   } else if (connection.provider === 'zoho') {
-    const calendarsResponse = await fetchFn('https://calendar.zoho.com/api/v1/calendars', { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+    const zohoDomain = (connection.accounts_server || 'https://accounts.zoho.com').replace('https://accounts.', '');
+    const zohoCalBase = `https://calendar.${zohoDomain}`;
+    const calendarsResponse = await fetchFn(`${zohoCalBase}/api/v1/calendars`, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
     const calendarsData = await calendarsResponse.json();
-    const primaryCalendar = calendarsData.calendars.find(c => c.isprimary) || calendarsData.calendars[0];
+    const primaryCalendar = calendarsData.calendars.find(c => c.isdefault) || calendarsData.calendars[0];
     const calendarUid = primaryCalendar.uid;
     const pad = n => String(n).padStart(2, '0');
     const formatZoho = (isoStr) => { const d = new Date(isoStr); return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}+0000`; };
     const zohoBody = { eventdata: { title: eventData.title, description: eventData.description || '', start: formatZoho(eventData.start), end: formatZoho(eventData.end), attendees: eventData.attendees.map(email => ({ email })) } };
-    const response = await fetchFn(`https://calendar.zoho.com/api/v1/calendars/${calendarUid}/events`, { method: 'POST', headers: { Authorization: `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(zohoBody) });
+    const response = await fetchFn(`${zohoCalBase}/api/v1/calendars/${calendarUid}/events`, { method: 'POST', headers: { Authorization: `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(zohoBody) });
     if (!response.ok) throw new Error('Zoho event creation failed');
     const result = await response.json();
     return result.events[0].uid;
@@ -154,10 +165,12 @@ async function deleteCalendarEvent(fetchFn, db, encryptionKey, connection, calen
   } else if (connection.provider === 'microsoft') {
     await fetchFn(`https://graph.microsoft.com/v1.0/me/events/${calendarEventId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } });
   } else if (connection.provider === 'zoho') {
-    const calendarsResponse = await fetchFn('https://calendar.zoho.com/api/v1/calendars', { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+    const zohoDomain = (connection.accounts_server || 'https://accounts.zoho.com').replace('https://accounts.', '');
+    const zohoCalBase = `https://calendar.${zohoDomain}`;
+    const calendarsResponse = await fetchFn(`${zohoCalBase}/api/v1/calendars`, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
     const calendarsData = await calendarsResponse.json();
-    const primaryCalendar = calendarsData.calendars.find(c => c.isprimary) || calendarsData.calendars[0];
-    await fetchFn(`https://calendar.zoho.com/api/v1/calendars/${primaryCalendar.uid}/events/${calendarEventId}`, { method: 'DELETE', headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+    const primaryCalendar = calendarsData.calendars.find(c => c.isdefault) || calendarsData.calendars[0];
+    await fetchFn(`${zohoCalBase}/api/v1/calendars/${primaryCalendar.uid}/events/${calendarEventId}`, { method: 'DELETE', headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
   }
 }
 

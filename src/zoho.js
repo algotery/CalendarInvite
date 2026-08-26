@@ -14,6 +14,7 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
       return decrypt(conn.encrypted_access_token, encryptionKey);
     }
 
+    const accountsServer = conn.accounts_server || 'https://accounts.zoho.com';
     const refreshToken = decrypt(conn.encrypted_refresh_token, encryptionKey);
     const params = new URLSearchParams({
       grant_type: 'refresh_token',
@@ -22,7 +23,7 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
       refresh_token: refreshToken,
     });
 
-    const response = await fetcher(`https://accounts.zoho.com/oauth/v2/token?${params}`, {
+    const response = await fetcher(`${accountsServer}/oauth/v2/token?${params}`, {
       method: 'POST',
     });
 
@@ -32,7 +33,8 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
     }
 
     const data = await response.json();
-    const newExpiry = new Date(Date.now() + data.expires_in * 1000).toISOString();
+    const expiresIn = data.expires_in || 3600;
+    const newExpiry = new Date(Date.now() + expiresIn * 1000).toISOString();
 
     await db.run(
       'UPDATE calendar_connections SET encrypted_access_token = $1, token_expiry = $2, status = $3 WHERE id = $4',
@@ -42,7 +44,16 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
     return data.access_token;
   }
 
+  function getCalendarBaseUrl(conn) {
+    const server = conn.accounts_server || 'https://accounts.zoho.com';
+    const domain = server.replace('https://accounts.', '');
+    return `https://calendar.${domain}`;
+  }
+
   async function getBusySlots(connectionId, timeMin, timeMax) {
+    const conn = await db.getOne('SELECT * FROM calendar_connections WHERE id = $1', [connectionId]);
+    if (!conn) throw new Error(`Connection ${connectionId} not found`);
+    const calendarBase = getCalendarBaseUrl(conn);
     const accessToken = await getAccessToken(connectionId);
 
     const params = new URLSearchParams({
@@ -51,7 +62,7 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
     });
 
     const response = await fetcher(
-      `https://calendar.zoho.com/api/v1/calendars/freebusy?${params}`,
+      `${calendarBase}/api/v1/calendars/freebusy?${params}`,
       {
         headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
       }
@@ -71,14 +82,17 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
   }
 
   async function createEvent(connectionId, eventData) {
+    const conn = await db.getOne('SELECT * FROM calendar_connections WHERE id = $1', [connectionId]);
+    if (!conn) throw new Error(`Connection ${connectionId} not found`);
+    const calendarBase = getCalendarBaseUrl(conn);
     const accessToken = await getAccessToken(connectionId);
 
     const calendarsResponse = await fetcher(
-      'https://calendar.zoho.com/api/v1/calendars',
+      `${calendarBase}/api/v1/calendars`,
       { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } }
     );
     const calendarsData = await calendarsResponse.json();
-    const primaryCalendar = calendarsData.calendars.find(c => c.isprimary) || calendarsData.calendars[0];
+    const primaryCalendar = calendarsData.calendars.find(c => c.isdefault) || calendarsData.calendars[0];
     const calendarUid = primaryCalendar.uid;
 
     const attendees = (eventData.attendees || []).map(email => ({ email }));
@@ -94,7 +108,7 @@ function getZohoClient({ db, encryptionKey, clientId, clientSecret, fetchFn }) {
     };
 
     const response = await fetcher(
-      `https://calendar.zoho.com/api/v1/calendars/${calendarUid}/events`,
+      `${calendarBase}/api/v1/calendars/${calendarUid}/events`,
       {
         method: 'POST',
         headers: {
