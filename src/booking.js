@@ -681,8 +681,9 @@ function registerBusynessApi(app, { encryptionKey }) {
           const response = await fetchWithTimeout(app.fetchFn, 'https://www.googleapis.com/calendar/v3/freeBusy', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ timeMin: rangeMin, timeMax: rangeMax, items: [{ id: 'primary' }] }) });
           if (response.ok) { const data = await response.json(); return data.calendars?.primary?.busy || []; }
         } else if (cal.provider === 'microsoft') {
-          const response = await fetchWithTimeout(app.fetchFn, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ schedules: [cal.email], startTime: { dateTime: rangeMin, timeZone: 'UTC' }, endTime: { dateTime: rangeMax, timeZone: 'UTC' } }) });
-          if (response.ok) { const data = await response.json(); return (data.value?.[0]?.scheduleItems || []).map(item => ({ start: item.start.dateTime, end: item.end.dateTime })); }
+          const calViewUrl = `https://graph.microsoft.com/v1.0/me/calendarView?startDateTime=${encodeURIComponent(rangeMin)}&endDateTime=${encodeURIComponent(rangeMax)}&$select=start,end,showAs`;
+          const response = await fetchWithTimeout(app.fetchFn, calViewUrl, { headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.timezone="UTC"' } });
+          if (response.ok) { const data = await response.json(); return (data.value || []).filter(ev => ev.showAs !== 'free').map(ev => ({ start: ev.start.dateTime, end: ev.end.dateTime })); }
         } else if (cal.provider === 'zoho') {
           const zohoDomain = (cal.accounts_server || 'https://accounts.zoho.com').replace('https://accounts.', '');
           const zohoCalBase = `https://calendar.${zohoDomain}`;

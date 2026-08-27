@@ -20,7 +20,8 @@ const SCHEMA_SQL = `
     token_expiry TEXT,
     email TEXT,
     status TEXT NOT NULL DEFAULT 'connected' CHECK(status IN ('connected', 'expired')),
-    accounts_server TEXT
+    accounts_server TEXT,
+    ms_tenant_id TEXT
   );
 
   CREATE TABLE IF NOT EXISTS booking_profiles (
@@ -128,6 +129,7 @@ async function createDatabase(connectionString) {
   await pool.query(`UPDATE admin SET onboarding_completed_at = NOW()::TEXT WHERE onboarding_completed_at IS NULL AND id IN (SELECT DISTINCT user_id FROM booking_profiles)`).catch(() => {});
   await pool.query(`ALTER TABLE booking_profiles ADD COLUMN IF NOT EXISTS allowed_durations TEXT NOT NULL DEFAULT '[30,45,60]'`).catch(() => {});
   await pool.query(`ALTER TABLE booking_profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE calendar_connections ADD COLUMN IF NOT EXISTS ms_tenant_id TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE calendar_connections ADD COLUMN IF NOT EXISTS accounts_server TEXT`).catch(() => {});
 
   return {

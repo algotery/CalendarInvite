@@ -691,6 +691,23 @@ html[data-theme="dark"] body {
   border-color: var(--primary);
 }
 
+[data-theme="dark"] .calendar-connect-dropdown-menu {
+  background: #1e1e1e;
+  border-color: #2e2e2e;
+}
+
+[data-theme="dark"] .calendar-connect-dropdown-menu a {
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .calendar-connect-dropdown-menu a:hover {
+  background: #252525;
+}
+
+[data-theme="dark"] .calendar-connect-dropdown-menu a + a {
+  border-color: #2e2e2e;
+}
+
 [data-theme="dark"] .availability-card,
 [data-theme="dark"] .schedule-card {
   background: #1e1e1e;
@@ -6590,6 +6607,59 @@ input[type="radio"] {
   opacity: 0.45;
   pointer-events: none;
   cursor: not-allowed;
+}
+
+.calendar-connect-dropdown {
+  position: relative;
+}
+
+.calendar-connect-dropdown > .calendar-connect-btn {
+  width: 100%;
+  font-family: inherit;
+  line-height: inherit;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.calendar-connect-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.calendar-connect-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: var(--neutral-0);
+  border: 1.5px solid var(--neutral-30);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  overflow: hidden;
+}
+
+.calendar-connect-dropdown.open .calendar-connect-dropdown-menu {
+  display: block;
+}
+
+.calendar-connect-dropdown-menu a {
+  display: block;
+  padding: 12px 16px;
+  color: var(--text-primary);
+  text-decoration: none;
+  font-size: 0.8125rem;
+  transition: background 150ms;
+}
+
+.calendar-connect-dropdown-menu a:hover {
+  background: var(--primary-50);
+}
+
+.calendar-connect-dropdown-menu a + a {
+  border-top: 1px solid var(--neutral-20);
 }
 
 .calendars-list-section {

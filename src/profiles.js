@@ -10,6 +10,8 @@ function registerProfileRoutes(app) {
   app.get('/profiles', async (request, reply) => {
     const token = reply.generateCsrf();
     const adminId = request.session.get('adminId');
+    const admin = await app.db.getOne("SELECT timezone FROM admin WHERE id = $1", [adminId]);
+    const adminTz = admin?.timezone || 'UTC';
     const profiles = await app.db.getAll("SELECT * FROM booking_profiles WHERE user_id = $1 ORDER BY created_at DESC", [adminId]);
     const baseUrl = `${request.protocol}://${request.hostname}${request.port && request.port !== 80 && request.port !== 443 ? ':' + request.port : ''}`;
 
@@ -31,8 +33,14 @@ function registerProfileRoutes(app) {
       });
 
       const activeDays = Object.keys(schedulesByDay).map(d => DAYS[d].substring(0, 3)).join(', ');
-      const firstDaySchedule = schedulesByDay[Object.keys(schedulesByDay)[0]];
-      const timeRange = firstDaySchedule ? `${firstDaySchedule[0].start} - ${firstDaySchedule[0].end}` : '';
+      let timeRange = '';
+      if (schedules.length > 0) {
+        const allStarts = schedules.map(s => s.start_time).sort();
+        const allEnds = schedules.map(s => s.end_time).sort();
+        const earliest = convertUTCToLocalTime(allStarts[0], adminTz);
+        const latest = convertUTCToLocalTime(allEnds[allEnds.length - 1], adminTz);
+        timeRange = `${earliest} - ${latest}`;
+      }
 
       return `
       <div class="profile-card">

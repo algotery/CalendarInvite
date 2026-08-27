@@ -47,10 +47,10 @@ describe('Microsoft Graph Utilities', () => {
             }),
           };
         }
-        if (url.includes('/me/calendar/getSchedule')) {
+        if (url.includes('/me/calendarView')) {
           return {
             ok: true,
-            json: async () => ({ value: [{ scheduleItems: [] }] }),
+            json: async () => ({ value: [] }),
           };
         }
       });
@@ -81,20 +81,19 @@ describe('Microsoft Graph Utilities', () => {
   });
 
   describe('getMicrosoftBusySlots', () => {
-    it('returns busy time ranges from Graph API getSchedule', async () => {
+    it('returns busy time ranges from Graph API calendarView', async () => {
       const { createMicrosoftClient } = require('../src/microsoft');
 
       const mockFetch = mock.fn(async (url, options) => {
-        if (url.includes('/me/calendar/getSchedule')) {
+        if (url.includes('/me/calendarView')) {
           return {
             ok: true,
             json: async () => ({
-              value: [{
-                scheduleItems: [
-                  { status: 'busy', start: { dateTime: '2024-01-15T09:00:00', timeZone: 'UTC' }, end: { dateTime: '2024-01-15T10:00:00', timeZone: 'UTC' } },
-                  { status: 'tentative', start: { dateTime: '2024-01-15T14:00:00', timeZone: 'UTC' }, end: { dateTime: '2024-01-15T15:00:00', timeZone: 'UTC' } },
-                ],
-              }],
+              value: [
+                { showAs: 'busy', start: { dateTime: '2024-01-15T09:00:00', timeZone: 'UTC' }, end: { dateTime: '2024-01-15T10:00:00', timeZone: 'UTC' } },
+                { showAs: 'tentative', start: { dateTime: '2024-01-15T14:00:00', timeZone: 'UTC' }, end: { dateTime: '2024-01-15T15:00:00', timeZone: 'UTC' } },
+                { showAs: 'free', start: { dateTime: '2024-01-15T16:00:00', timeZone: 'UTC' }, end: { dateTime: '2024-01-15T17:00:00', timeZone: 'UTC' } },
+              ],
             }),
           };
         }

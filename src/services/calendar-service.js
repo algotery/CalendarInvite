@@ -24,8 +24,9 @@ async function getValidTokenForConnection(db, encryptionKey, connection) {
   if (connection.provider === 'google') {
     return await refreshGoogleToken(db, encryptionKey, connection.id, process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
   } else if (connection.provider === 'microsoft') {
-    const client = createMicrosoftClient({ db, encryptionKey, clientId: process.env.MICROSOFT_CLIENT_ID, clientSecret: process.env.MICROSOFT_CLIENT_SECRET, tenantId: process.env.MICROSOFT_TENANT_ID || 'common' });
-    return await client.getValidAccessToken(connection.id);
+    const msTenant = connection.ms_tenant_id || process.env.MICROSOFT_TENANT_ID || 'common';
+    const client = createMicrosoftClient({ db, encryptionKey, clientId: process.env.MICROSOFT_CLIENT_ID, clientSecret: process.env.MICROSOFT_CLIENT_SECRET, tenantId: msTenant });
+    return await client.getValidAccessToken(connection.id, { forceRefresh: true });
   } else if (connection.provider === 'zoho') {
     const client = getZohoClient({ db, encryptionKey, clientId: process.env.ZOHO_CLIENT_ID, clientSecret: process.env.ZOHO_CLIENT_SECRET });
     return await client.getAccessToken(connection.id);
@@ -66,25 +67,38 @@ async function getCalendarBusySlots(db, encryptionKey, profileId, dateStr, fetch
         busy.push(...(data.calendars?.primary?.busy || []));
       }
     } else if (cal.provider === 'microsoft') {
-      const response = await fetchWithTimeout(fetchFn, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
-        method: 'POST',
+      let token = accessToken;
+      const calViewUrl = `https://graph.microsoft.com/v1.0/me/calendarView?startDateTime=${encodeURIComponent(timeMin)}&endDateTime=${encodeURIComponent(timeMax)}&$select=start,end,showAs`;
+      let response = await fetchWithTimeout(fetchFn, calViewUrl, {
         headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          Prefer: 'outlook.timezone="UTC"',
         },
-        body: JSON.stringify({
-          schedules: [cal.email],
-          startTime: { dateTime: timeMin, timeZone: 'UTC' },
-          endTime: { dateTime: timeMax, timeZone: 'UTC' },
-        }),
       });
+      if (response.status === 401) {
+        const msTenant = cal.ms_tenant_id || process.env.MICROSOFT_TENANT_ID || 'common';
+        const client = createMicrosoftClient({ db, encryptionKey, clientId: process.env.MICROSOFT_CLIENT_ID, clientSecret: process.env.MICROSOFT_CLIENT_SECRET, tenantId: msTenant, fetchFn });
+        token = await client.getValidAccessToken(cal.id, { forceRefresh: true });
+        console.log('[MS Calendar] Retrying with refreshed token');
+        response = await fetchWithTimeout(fetchFn, calViewUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Prefer: 'outlook.timezone="UTC"',
+          },
+        });
+      }
       if (response.ok) {
         const data = await response.json();
-        const scheduleItems = data.value?.[0]?.scheduleItems || [];
-        busy.push(...scheduleItems.map(item => ({
-          start: item.start.dateTime,
-          end: item.end.dateTime,
+        console.log('[MS Calendar] Raw events:', JSON.stringify(data.value));
+        const events = (data.value || []).filter(ev => ev.showAs !== 'free');
+        console.log('[MS Calendar] Busy events:', events.length);
+        busy.push(...events.map(ev => ({
+          start: ev.start.dateTime,
+          end: ev.end.dateTime,
         })));
+      } else {
+        const errBody = await response.text();
+        console.error('[MS Calendar] Error:', response.status, errBody.substring(0, 500));
       }
     } else if (cal.provider === 'zoho') {
       const zohoDomain = (cal.accounts_server || 'https://accounts.zoho.com').replace('https://accounts.', '');
