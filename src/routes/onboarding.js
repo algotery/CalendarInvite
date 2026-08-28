@@ -74,10 +74,18 @@ function registerOnboardingRoutes(app, opts = {}) {
                   ${PROVIDER_ICONS.google}
                   <span>Google Calendar</span>
                 </a>` : ''}
-                ${msConfigured ? `<a href="/admin/calendars/connect/microsoft?from=onboarding" class="onboarding-calendar-btn">
-                  ${PROVIDER_ICONS.microsoft}
-                  <span>Microsoft 365</span>
-                </a>` : ''}
+                ${msConfigured ? `
+                  <div class="calendar-connect-dropdown">
+                    <button type="button" class="onboarding-calendar-btn" onclick="this.parentElement.classList.toggle('open')">
+                      ${PROVIDER_ICONS.microsoft}
+                      <span>Microsoft 365</span>
+                    </button>
+                    <div class="calendar-connect-dropdown-menu">
+                      <a href="/admin/calendars/connect/microsoft?from=onboarding&account_type=personal">Personal (Outlook.com / Hotmail)</a>
+                      <a href="/admin/calendars/connect/microsoft?from=onboarding&account_type=work">Work / School</a>
+                    </div>
+                  </div>
+                ` : ''}
                 ${!googleConfigured && !msConfigured ? '<p class="onboarding-panel-desc" style="text-align:center;">No calendar providers configured yet.</p>' : ''}
               </div>
             `}

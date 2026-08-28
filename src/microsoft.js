@@ -3,19 +3,20 @@ const { encrypt, decrypt } = require('./encryption');
 function createMicrosoftClient({ db, encryptionKey, clientId, clientSecret, tenantId, fetchFn }) {
   const fetch = fetchFn || globalThis.fetch;
 
-  async function getValidAccessToken(connectionId) {
+  async function getValidAccessToken(connectionId, { forceRefresh = false } = {}) {
     const conn = await db.getOne('SELECT * FROM calendar_connections WHERE id = $1', [connectionId]);
     if (!conn) throw new Error(`Connection ${connectionId} not found`);
 
     const now = new Date();
     const expiry = new Date(conn.token_expiry);
 
-    if (expiry > now) {
+    if (!forceRefresh && expiry > now) {
       return decrypt(conn.encrypted_access_token, encryptionKey);
     }
 
     const refreshToken = decrypt(conn.encrypted_refresh_token, encryptionKey);
-    const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+    const effectiveTenant = conn.ms_tenant_id || tenantId;
+    const tokenUrl = `https://login.microsoftonline.com/${effectiveTenant}/oauth2/v2.0/token`;
 
     const response = await fetch(tokenUrl, {
       method: 'POST',
@@ -46,28 +47,22 @@ function createMicrosoftClient({ db, encryptionKey, clientId, clientSecret, tena
 
   async function getMicrosoftBusySlots(connectionId, timeMin, timeMax) {
     const accessToken = await getValidAccessToken(connectionId);
-    const conn = await db.getOne('SELECT email FROM calendar_connections WHERE id = $1', [connectionId]);
 
-    const response = await fetch('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
-      method: 'POST',
+    const calViewUrl = `https://graph.microsoft.com/v1.0/me/calendarView?startDateTime=${encodeURIComponent(timeMin)}&endDateTime=${encodeURIComponent(timeMax)}&$select=start,end,showAs`;
+    const response = await fetch(calViewUrl, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
+        Prefer: 'outlook.timezone="UTC"',
       },
-      body: JSON.stringify({
-        schedules: [conn.email],
-        startTime: { dateTime: timeMin, timeZone: 'UTC' },
-        endTime: { dateTime: timeMax, timeZone: 'UTC' },
-      }),
     });
 
     const data = await response.json();
     if (!response.ok) throw new Error('Failed to fetch busy slots');
 
-    const scheduleItems = data.value[0]?.scheduleItems || [];
-    return scheduleItems.map(item => ({
-      start: item.start.dateTime,
-      end: item.end.dateTime,
+    const events = (data.value || []).filter(ev => ev.showAs !== 'free');
+    return events.map(ev => ({
+      start: ev.start.dateTime,
+      end: ev.end.dateTime,
     }));
   }
 

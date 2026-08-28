@@ -12,6 +12,7 @@ function registerCalendarsRoutes(app, opts) {
   const zohoClientId = opts.zohoClientId;
   const zohoClientSecret = opts.zohoClientSecret;
   const zohoRedirectUri = opts.zohoRedirectUri;
+  const zohoAccountsServer = opts.zohoAccountsServer || 'https://accounts.zoho.com';
 
   app.get('/calendars', async (request, reply) => {
     const adminId = request.session.get('adminId');
@@ -59,7 +60,7 @@ function registerCalendarsRoutes(app, opts) {
       ? `<details><summary>Some providers are not configured</summary><p>Add the following to your <code>.env</code> file:</p><ul>${missingVars.map(v => `<li>${v}</li>`).join('')}</ul></details>`
       : '';
 
-    reply.type('text/html').send(BASE_LAYOUT('Calendar Connections', `
+    return reply.type('text/html').send(BASE_LAYOUT('Calendar Connections', `
       <div class="calendars-page">
         <div class="calendars-header">
           <h1>Calendar Connections</h1>
@@ -70,7 +71,15 @@ function registerCalendarsRoutes(app, opts) {
           <span class="field-label" style="margin-bottom: 12px; display: block;">Add a calendar</span>
           <div class="calendar-connect-grid">
             ${connectBtn('/admin/calendars/connect/google', 'Connect Google Calendar', icons.google, googleConfigured)}
-            ${connectBtn('/admin/calendars/connect/microsoft', 'Connect Office 365', icons.microsoft, msConfigured)}
+            ${msConfigured ? `
+              <div class="calendar-connect-dropdown">
+                <button type="button" class="calendar-connect-btn" onclick="this.parentElement.classList.toggle('open')">${icons.microsoft} <span>Connect Office 365</span></button>
+                <div class="calendar-connect-dropdown-menu">
+                  <a href="/admin/calendars/connect/microsoft?account_type=personal">Personal (Outlook.com / Hotmail)</a>
+                  <a href="/admin/calendars/connect/microsoft?account_type=work">Work / School</a>
+                </div>
+              </div>
+            ` : connectBtn('#', 'Connect Office 365', icons.microsoft, false)}
             ${connectBtn('/admin/calendars/connect/zoho', 'Connect Zoho Calendar', icons.zoho, zohoConfigured)}
           </div>
         </div>
@@ -206,20 +215,24 @@ function registerCalendarsRoutes(app, opts) {
       `));
     }
     const from = request.query.from || '';
+    const accountType = request.query.account_type || '';
     const adminId = request.session.get('adminId');
     const nonce = crypto.randomBytes(16).toString('hex');
-    const payload = Buffer.from(JSON.stringify({ nonce, adminId, from })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ nonce, adminId, from, accountType })).toString('base64url');
     const hmac = crypto.createHmac('sha256', encryptionKey).update(payload).digest('base64url');
     const state = `${payload}.${hmac}`;
     request.session.set('oauthState', nonce);
     const scope = 'offline_access Calendars.ReadWrite User.Read';
-    const authUrl = new URL(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`);
+    // Use 'consumers' for personal accounts, configured tenantId for work/school
+    const effectiveTenant = accountType === 'personal' ? 'consumers' : tenantId;
+    const authUrl = new URL(`https://login.microsoftonline.com/${effectiveTenant}/oauth2/v2.0/authorize`);
     authUrl.searchParams.set('client_id', clientId);
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set('redirect_uri', redirectUri);
     authUrl.searchParams.set('scope', scope);
     authUrl.searchParams.set('response_mode', 'query');
     authUrl.searchParams.set('state', state);
+    authUrl.searchParams.set('prompt', 'consent');
     return reply.redirect(authUrl.toString());
   });
 
@@ -257,10 +270,20 @@ function registerCalendarsRoutes(app, opts) {
 
     const clientId = opts.microsoftClientId || process.env.MICROSOFT_CLIENT_ID;
     const clientSecret = opts.microsoftClientSecret || process.env.MICROSOFT_CLIENT_SECRET;
-    const tenantId = opts.microsoftTenantId || process.env.MICROSOFT_TENANT_ID;
     const redirectUri = opts.microsoftRedirectUri || process.env.MICROSOFT_REDIRECT_URI;
 
-    const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+    // Determine which tenant was used for authorize from state
+    let accountType = '';
+    try {
+      if (state && state.includes('.')) {
+        const [p] = state.split('.');
+        const decoded = JSON.parse(Buffer.from(p, 'base64url').toString());
+        accountType = decoded.accountType || '';
+      }
+    } catch {}
+    const exchangeTenant = accountType === 'personal' ? 'consumers' : 'common';
+
+    const tokenUrl = `https://login.microsoftonline.com/${exchangeTenant}/oauth2/v2.0/token`;
     const tokenResponse = await app.fetchFn(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -276,15 +299,28 @@ function registerCalendarsRoutes(app, opts) {
 
     const tokenData = await tokenResponse.json();
     if (!tokenResponse.ok) {
+      console.error('[MS OAuth] Token exchange failed:', JSON.stringify(tokenData));
       return reply.status(502).send('Failed to exchange authorization code');
     }
 
+    let actualTenantId = exchangeTenant;
+    if (exchangeTenant === 'common') {
+      try {
+        const tokenPayload = JSON.parse(Buffer.from(tokenData.access_token.split('.')[1], 'base64').toString());
+        actualTenantId = tokenPayload.tid || 'common';
+      } catch {}
+    }
+
+    const accessToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token;
+    const expiresIn = tokenData.expires_in;
+
     const meResponse = await app.fetchFn('https://graph.microsoft.com/v1.0/me', {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
     const meData = await meResponse.json();
 
-    const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
     const userId = request.session.get('adminId') || stateAdminId;
     if (!userId) {
@@ -292,36 +328,53 @@ function registerCalendarsRoutes(app, opts) {
     }
     request.session.set('adminId', userId);
 
-    const msEmail = meData.mail || meData.userPrincipalName;
+    let msEmail = meData.mail || meData.userPrincipalName || '';
+    if (msEmail.includes('#EXT#')) {
+      msEmail = msEmail.split('#EXT#')[0].replace(/_([^_]*)$/, '@$1');
+    }
     const msExisting = await app.db.getOne(
       'SELECT id FROM calendar_connections WHERE provider = $1 AND email = $2 AND user_id = $3',
       ['microsoft', msEmail, userId]
     );
 
+    let connectionId;
     if (msExisting) {
+      connectionId = msExisting.id;
       await app.db.run(
-        'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4 WHERE id = $5',
+        'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4, ms_tenant_id = $5 WHERE id = $6',
         [
-          encrypt(tokenData.access_token, encryptionKey),
-          encrypt(tokenData.refresh_token, encryptionKey),
+          encrypt(accessToken, encryptionKey),
+          encrypt(refreshToken, encryptionKey),
           expiresAt,
           'connected',
+          actualTenantId,
           msExisting.id
         ]
       );
     } else {
-      await app.db.run(`
-        INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      const insertResult = await app.db.query(`
+        INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status, ms_tenant_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
       `, [
         userId,
         'microsoft',
-        encrypt(tokenData.access_token, encryptionKey),
-        encrypt(tokenData.refresh_token, encryptionKey),
+        encrypt(accessToken, encryptionKey),
+        encrypt(refreshToken, encryptionKey),
         expiresAt,
         msEmail,
-        'connected'
+        'connected',
+        actualTenantId
       ]);
+      connectionId = insertResult.rows[0].id;
+    }
+
+    // Ensure profile_read_calendars mapping exists for all user profiles
+    const profiles = await app.db.getAll('SELECT id FROM booking_profiles WHERE user_id = $1', [userId]);
+    for (const profile of profiles) {
+      await app.db.run(
+        'INSERT INTO profile_read_calendars (profile_id, calendar_connection_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [profile.id, connectionId]
+      );
     }
 
     const calFrom = request.session.get('calendarFrom') || stateFrom;
@@ -341,11 +394,11 @@ function registerCalendarsRoutes(app, opts) {
       client_id: zohoClientId,
       redirect_uri: zohoRedirectUri,
       response_type: 'code',
-      scope: 'ZohoCalendar.calendar.ALL,ZohoCalendar.event.ALL,ZohoCalendar.freebusy.READ',
+      scope: 'ZohoCalendar.calendar.ALL,ZohoCalendar.event.ALL,ZohoCalendar.freebusy.READ,AaaServer.profile.READ',
       access_type: 'offline',
       prompt: 'consent',
     });
-    return reply.redirect(`https://accounts.zoho.com/oauth/v2/auth?${params}`);
+    return reply.redirect(`${zohoAccountsServer}/oauth/v2/auth?${params}`);
   });
 
   app.get('/calendars/zoho/callback', async (request, reply) => {
@@ -354,6 +407,7 @@ function registerCalendarsRoutes(app, opts) {
       return reply.status(400).send('Missing authorization code');
     }
 
+    const accountsServer = request.query['accounts-server'] || 'https://accounts.zoho.com';
     const fetchFn = app.zohoFetch || globalThis.fetch;
 
     const tokenParams = new URLSearchParams({
@@ -364,7 +418,7 @@ function registerCalendarsRoutes(app, opts) {
       code,
     });
 
-    const tokenResponse = await fetchFn(`https://accounts.zoho.com/oauth/v2/token?${tokenParams}`, {
+    const tokenResponse = await fetchFn(`${accountsServer}/oauth/v2/token?${tokenParams}`, {
       method: 'POST',
     });
 
@@ -373,13 +427,21 @@ function registerCalendarsRoutes(app, opts) {
     }
 
     const tokenData = await tokenResponse.json();
-    const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
+    const expiresIn = tokenData.expires_in || 3600;
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-    const userResponse = await fetchFn('https://accounts.zoho.com/oauth/user/info', {
-      headers: { Authorization: `Zoho-oauthtoken ${tokenData.access_token}` },
-    });
-    const userData = await userResponse.json();
-    const email = userData.Email || '';
+    let email = '';
+    try {
+      const userResponse = await fetchFn(`${accountsServer}/oauth/user/info`, {
+        headers: { Authorization: `Zoho-oauthtoken ${tokenData.access_token}` },
+      });
+      if (userResponse.ok) {
+        const userData = await userResponse.json();
+        email = userData.Email || userData.email || userData.DISPLAY_NAME || '';
+      }
+    } catch (e) {
+      // user info is best-effort
+    }
 
     const encryptedAccess = encrypt(tokenData.access_token, encryptionKey);
     const encryptedRefresh = encrypt(tokenData.refresh_token, encryptionKey);
@@ -396,13 +458,13 @@ function registerCalendarsRoutes(app, opts) {
 
     if (zohoExisting) {
       await app.db.run(
-        'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4 WHERE id = $5',
-        [encryptedAccess, encryptedRefresh, expiresAt, 'connected', zohoExisting.id]
+        'UPDATE calendar_connections SET encrypted_access_token = $1, encrypted_refresh_token = $2, token_expiry = $3, status = $4, accounts_server = $5 WHERE id = $6',
+        [encryptedAccess, encryptedRefresh, expiresAt, 'connected', accountsServer, zohoExisting.id]
       );
     } else {
       await app.db.run(
-        'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [userId, 'zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected']
+        'INSERT INTO calendar_connections (user_id, provider, encrypted_access_token, encrypted_refresh_token, token_expiry, email, status, accounts_server) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [userId, 'zoho', encryptedAccess, encryptedRefresh, expiresAt, email, 'connected', accountsServer]
       );
     }
 
