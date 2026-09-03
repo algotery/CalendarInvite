@@ -67,7 +67,7 @@ jobs:
       - name: Backend İmajını Build Et ve ECR'a Gönder
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: calendarinvite/backend
+          ECR_REPOSITORY: meetsgo/backend
           IMAGE_TAG: latest
         run: |
           docker build -f Dockerfile.backend -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
@@ -76,7 +76,7 @@ jobs:
       - name: Frontend İmajını Build Et ve ECR'a Gönder
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: calendarinvite/frontend
+          ECR_REPOSITORY: meetsgo/frontend
           IMAGE_TAG: latest
         run: |
           docker build -f Dockerfile.frontend -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
