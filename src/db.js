@@ -119,7 +119,12 @@ const SCHEMA_SQL = `
 `;
 
 async function createDatabase(connectionString) {
-  const pool = new Pool({ connectionString });
+  const pool = new Pool({ 
+    connectionString,
+    ssl: {
+      rejectUnauthorized: false
+    }
+  });
 
   await pool.query(SCHEMA_SQL);
 
