@@ -119,12 +119,18 @@ const SCHEMA_SQL = `
 `;
 
 async function createDatabase(connectionString) {
-  const pool = new Pool({ 
-    connectionString,
-    ssl: {
+  const poolConfig = { 
+    connectionString 
+  };
+
+  // Eğer GitHub Actions (CI) veya lokal test ortamında DEĞİLSEK SSL'i aktif et
+  if (!process.env.CI && process.env.NODE_ENV !== 'test') {
+    poolConfig.ssl = {
       rejectUnauthorized: false
-    }
-  });
+    };
+  }
+
+  const pool = new Pool(poolConfig);
 
   await pool.query(SCHEMA_SQL);
 
